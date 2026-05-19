@@ -1,0 +1,181 @@
+// Bitscy database schema
+// Owned by the Catalog Engineer. Schema changes are coordination points; review with the team.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String   @id @default(cuid())
+  npub          String   @unique // Nostr public key (hex)
+  username      String   @unique
+  displayName   String?
+  avatar        String?
+  about         String?
+  lightningAddr String?  @unique // e.g., "adaeze@bitscy.com"
+  role          UserRole @default(BUYER)
+
+  // Server-side key storage for buyers who don't have NIP-07.
+  // Encrypted with a passphrase the user supplies; server cannot decrypt.
+  encryptedKey String?
+  keySalt      String?
+  keyIv        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products          Product[]
+  ordersAsBuyer     Order[]             @relation("BuyerOrders")
+  ordersAsSeller    Order[]             @relation("SellerOrders")
+  bankAccounts      BankAccount[]
+  pushSubscriptions PushSubscription[]
+  payouts           Payout[]
+
+  @@index([role])
+}
+
+enum UserRole {
+  BUYER
+  SELLER
+}
+
+model Product {
+  id           String   @id @default(cuid())
+  sellerId     String
+  seller       User     @relation(fields: [sellerId], references: [id])
+  title        String
+  description  String   @db.Text
+  priceSats    BigInt
+  shippingSats BigInt   @default(0)
+  category     String
+  images       String[] // Cloudinary URLs
+  isDigital    Boolean  @default(false)
+  digitalUrl   String? // For digital products only — stored encrypted in v2
+  stock        Int      @default(1)
+  status       ProductStatus @default(ACTIVE)
+
+  // Nostr backref — the kind 30018 event ID published when this product was created/updated
+  nostrEventId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orderItems OrderItem[]
+
+  @@index([sellerId, status])
+  @@index([status, createdAt])
+  @@index([category, status])
+}
+
+enum ProductStatus {
+  ACTIVE
+  SOLD_OUT
+  UNLISTED
+}
+
+model Order {
+  id       String @id @default(cuid())
+  buyerId  String
+  buyer    User   @relation("BuyerOrders", fields: [buyerId], references: [id])
+  sellerId String
+  seller   User   @relation("SellerOrders", fields: [sellerId], references: [id])
+
+  items       OrderItem[]
+  totalSats   BigInt
+  shippingSats BigInt @default(0)
+
+  // Lightning payment details
+  invoiceBolt11 String?
+  paymentHash   String? @unique
+
+  status OrderStatus @default(PENDING)
+
+  // NIP-04 encrypted shipping address (only seller can decrypt)
+  encryptedShipping String? @db.Text
+
+  // Optional seller note when shipping
+  shippingNote String?
+
+  // Nostr backref — the kind 30019 event ID
+  nostrEventId String? @unique
+
+  createdAt DateTime  @default(now())
+  paidAt    DateTime?
+  shippedAt DateTime?
+
+  @@index([buyerId, createdAt])
+  @@index([sellerId, status])
+  @@index([status])
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int     @default(1)
+  priceSats BigInt
+
+  @@index([orderId])
+}
+
+model BankAccount {
+  id            String @id @default(cuid())
+  userId        String
+  user          User   @relation(fields: [userId], references: [id])
+  bankName      String
+  accountNumber String
+  accountName   String
+  isDefault     Boolean @default(false)
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+}
+
+model Payout {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  bankAccountId   String
+  amountSats      BigInt
+  amountNgn       BigInt
+  status          PayoutStatus @default(PENDING)
+  externalId      String? // Bitnob's payout ID in production
+  failureReason   String?
+  createdAt       DateTime @default(now())
+  completedAt     DateTime?
+
+  @@index([userId, createdAt])
+}
+
+enum PayoutStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  endpoint  String   @unique @db.Text
+  p256dh    String   @db.Text
+  auth      String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
