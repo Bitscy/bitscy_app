@@ -50,6 +50,3 @@ prisma/dev.db-journal
 *.pem
 .turbo
 
-# Claude context files (kept local)
-CLAUDE.md
-**/CLAUDE.md
