@@ -169,6 +169,15 @@ export interface PayoutRequest {
 
 export type PayoutStatus = 'PENDING' | 'SUCCESS' | 'FAILED';
 
+/** Immediate response from initiating or polling a payout (mock or real Bitnob). */
+export interface PayoutResult {
+  payoutId: string;
+  status: PayoutStatus;
+  amountSats: string;
+  amountNgn: string;
+  etaSeconds: number;
+}
+
 export interface Payout {
   id: string;
   amountSats: string;

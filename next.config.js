@@ -8,6 +8,16 @@ const withPWA = require('next-pwa')({
 
 const nextConfig = {
   reactStrictMode: true,
+  async rewrites() {
+    return [
+      // Proxy Lightning Address resolution to our API route.
+      // External wallets GET /.well-known/lnurlp/<username> per the LNURL-pay spec.
+      {
+        source: '/.well-known/lnurlp/:username',
+        destination: '/api/lnurlp/:username',
+      },
+    ];
+  },
   images: {
     remotePatterns: [
       {
