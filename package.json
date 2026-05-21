@@ -16,7 +16,6 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,md}\""
   },
   "dependencies": {
-    "@breeztech/breez-sdk-liquid": "^0.6.0",
     "@prisma/client": "^5.20.0",
     "cloudinary": "^2.5.0",
     "next": "^14.2.15",
@@ -33,6 +32,9 @@
     "qrcode.react": "^4.1.0",
     "lucide-react": "^0.454.0",
     "browser-image-compression": "^2.0.2"
+  },
+  "optionalDependencies": {
+    "@breeztech/breez-sdk-liquid": "^0.12.2"
   },
   "devDependencies": {
     "@types/node": "^22.7.6",
