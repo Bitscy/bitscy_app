@@ -169,6 +169,19 @@ export interface PayoutRequest {
 
 export type PayoutStatus = 'PENDING' | 'SUCCESS' | 'FAILED';
 
+/**
+ * Immediate response from the Bitnob payout API.
+ * Returned by initiatePayout() and getPayoutStatus().
+ * Distinct from `Payout` (the full DB record with bank account details).
+ */
+export interface PayoutResult {
+  payoutId: string;
+  status: PayoutStatus;
+  amountSats: string;
+  amountNgn: string;
+  etaSeconds: number;
+}
+
 export interface Payout {
   id: string;
   amountSats: string;
