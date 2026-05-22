@@ -6,9 +6,16 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
+}
+
+enum LedgerEntryType {
+  SALE // sats credited to seller from a buyer payment
+  WITHDRAWAL // sats debited when seller withdraws to NGN or Lightning
+  REFUND // sats debited when a refund is issued (v2)
+  ADJUSTMENT // manual correction (audit trail required)
 }
 
 model User {
@@ -31,11 +38,12 @@ model User {
   updatedAt DateTime @updatedAt
 
   products          Product[]
-  ordersAsBuyer     Order[]             @relation("BuyerOrders")
-  ordersAsSeller    Order[]             @relation("SellerOrders")
+  ordersAsBuyer     Order[]            @relation("BuyerOrders")
+  ordersAsSeller    Order[]            @relation("SellerOrders")
   bankAccounts      BankAccount[]
   pushSubscriptions PushSubscription[]
   payouts           Payout[]
+  ledgerEntries     LedgerEntry[]
 
   @@index([role])
 }
@@ -46,18 +54,18 @@ enum UserRole {
 }
 
 model Product {
-  id           String   @id @default(cuid())
+  id           String        @id @default(cuid())
   sellerId     String
-  seller       User     @relation(fields: [sellerId], references: [id])
+  seller       User          @relation(fields: [sellerId], references: [id])
   title        String
-  description  String   @db.Text
+  description  String        @db.Text
   priceSats    BigInt
-  shippingSats BigInt   @default(0)
+  shippingSats BigInt        @default(0)
   category     String
   images       String[] // Cloudinary URLs
-  isDigital    Boolean  @default(false)
+  isDigital    Boolean       @default(false)
   digitalUrl   String? // For digital products only — stored encrypted in v2
-  stock        Int      @default(1)
+  stock        Int           @default(1)
   status       ProductStatus @default(ACTIVE)
 
   // Nostr backref — the kind 30018 event ID published when this product was created/updated
@@ -86,9 +94,9 @@ model Order {
   sellerId String
   seller   User   @relation("SellerOrders", fields: [sellerId], references: [id])
 
-  items       OrderItem[]
-  totalSats   BigInt
-  shippingSats BigInt @default(0)
+  items        OrderItem[]
+  totalSats    BigInt
+  shippingSats BigInt      @default(0)
 
   // Lightning payment details
   invoiceBolt11 String?
@@ -135,30 +143,30 @@ model OrderItem {
 }
 
 model BankAccount {
-  id            String @id @default(cuid())
+  id            String   @id @default(cuid())
   userId        String
-  user          User   @relation(fields: [userId], references: [id])
+  user          User     @relation(fields: [userId], references: [id])
   bankName      String
   accountNumber String
   accountName   String
-  isDefault     Boolean @default(false)
+  isDefault     Boolean  @default(false)
   createdAt     DateTime @default(now())
 
   @@index([userId])
 }
 
 model Payout {
-  id              String   @id @default(cuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id])
-  bankAccountId   String
-  amountSats      BigInt
-  amountNgn       BigInt
-  status          PayoutStatus @default(PENDING)
-  externalId      String? // Bitnob's payout ID in production
-  failureReason   String?
-  createdAt       DateTime @default(now())
-  completedAt     DateTime?
+  id            String       @id @default(cuid())
+  userId        String
+  user          User         @relation(fields: [userId], references: [id])
+  bankAccountId String
+  amountSats    BigInt
+  amountNgn     BigInt
+  status        PayoutStatus @default(PENDING)
+  externalId    String? // Bitnob payout ID (real, from sandbox API in v1)
+  failureReason String?
+  createdAt     DateTime     @default(now())
+  completedAt   DateTime?
 
   @@index([userId, createdAt])
 }
@@ -179,4 +187,39 @@ model PushSubscription {
   createdAt DateTime @default(now())
 
   @@index([userId])
+}
+
+// LedgerEntry is the append-only record of every change to a
+// seller's sat balance. A seller's current balance is computed
+// as SUM(amountSats) WHERE userId = sellerId. Entries are
+// immutable; corrections use the ADJUSTMENT type, never an UPDATE.
+model LedgerEntry {
+  id              String          @id @default(cuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id])
+  amountSats      BigInt // positive = credit, negative = debit
+  type            LedgerEntryType
+  refId           String? // OrderId for SALE, PayoutId for WITHDRAWAL, etc.
+  description     String // human-readable, for audit trail
+  recordedNgnRate BigInt // BTC/NGN rate from CoinGecko at time of entry
+  createdAt       DateTime        @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// PendingPayment is short-lived. Maps an inbound Lightning paymentHash
+// to the seller and order it belongs to. Created when an invoice is
+// generated; deleted when the payment settles or expires.
+model PendingPayment {
+  paymentHash String   @id
+  sellerId    String
+  amountSats  BigInt
+  orderId     String? // null if direct LNURL pay outside marketplace flow
+  description String
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime // BOLT-11 expiry, typically 1 hour from creation
+
+  @@index([orderId])
+  @@index([sellerId])
+  @@index([expiresAt])
 }
