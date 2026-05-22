@@ -59,7 +59,7 @@ export interface Product {
   title: string;
   description: string;
   priceSats: string; // bigint serialized
-  priceNgnDisplay: string; // computed by backend at fixed demo rate
+  priceNgnDisplay: string; // computed by backend at live CoinGecko rate (cached 60s)
   shippingSats: string;
   category: ProductCategory;
   images: string[];
@@ -151,7 +151,7 @@ export interface InvoiceStatus {
 }
 
 // ============================================================================
-// Payouts (Bitnob mock in v1)
+// Payouts (real Bitnob sandbox integration in v1; production graduates via KYB)
 // ============================================================================
 
 export interface BankAccount {
@@ -175,10 +175,10 @@ export type PayoutStatus = 'PENDING' | 'SUCCESS' | 'FAILED';
  * Distinct from `Payout` (the full DB record with bank account details).
  */
 export interface PayoutResult {
-  payoutId: string;
+  payoutId: string; // Bitnob payout ID (real, from sandbox API)
   status: PayoutStatus;
   amountSats: string;
-  amountNgn: string;
+  amountNgn: string; // computed from live CoinGecko rate at time of withdrawal
   etaSeconds: number;
 }
 
@@ -192,6 +192,50 @@ export interface Payout {
   createdAt: string;
   completedAt: string | null;
   etaSeconds: number;
+}
+
+// ============================================================================
+// Ledger — append-only seller balance entries
+// ============================================================================
+
+/**
+ * The append-only record of every change to a seller's sat balance.
+ * A seller's current balance = SUM(amountSats) for their userId.
+ * Entries are immutable; corrections use the ADJUSTMENT type, never an UPDATE.
+ */
+
+export type LedgerEntryType = 'SALE' | 'WITHDRAWAL' | 'REFUND' | 'ADJUSTMENT';
+
+export interface LedgerEntry {
+  id: string;
+  userId: string;
+  amountSats: string; // bigint serialized; positive = credit, negative = debit
+  type: LedgerEntryType;
+  refId: string | null; // OrderId for SALE, PayoutId for WITHDRAWAL, etc.
+  description: string; // human-readable, for audit trail
+  recordedNgnRate: string; // BTC/NGN rate from CoinGecko at time of entry
+  createdAt: string; // ISO timestamp
+}
+
+// ============================================================================
+// PendingPayment — short-lived paymentHash → seller/order mapping
+// ============================================================================
+
+/**
+ * Tracks inbound Lightning payments expected by the platform wallet.
+ * Created when an invoice is generated; deleted when the payment settles
+ * or expires. Maps the paymentHash to the seller (for ledger credit) and
+ * the order (for status update).
+ */
+
+export interface PendingPayment {
+  paymentHash: string;
+  sellerId: string;
+  amountSats: string; // bigint serialized
+  orderId: string | null; // null if direct LNURL pay outside marketplace flow
+  description: string;
+  createdAt: string; // ISO timestamp
+  expiresAt: string; // ISO timestamp — typically 1h from creation
 }
 
 // ============================================================================
