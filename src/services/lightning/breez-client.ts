@@ -37,7 +37,7 @@ interface CreateInvoiceParams {
  *   3. Receive the BOLT-11 invoice
  *   4. Parse and return
  */
-export async function createInvoice(params: CreateInvoiceParams): Promise<LightningInvoice> {
+export async function createInvoice(_params: CreateInvoiceParams): Promise<LightningInvoice> {
   throw new Error('NOT_IMPLEMENTED: createInvoice — see TODO(commerce)');
 }
 
@@ -47,7 +47,7 @@ export async function createInvoice(params: CreateInvoiceParams): Promise<Lightn
  * TODO(commerce): Real implementation.
  * Query the Breez SDK for the current state of the payment hash.
  */
-export async function verifyInvoice(paymentHash: string): Promise<InvoiceStatus> {
+export async function verifyInvoice(_paymentHash: string): Promise<InvoiceStatus> {
   throw new Error('NOT_IMPLEMENTED: verifyInvoice — see TODO(commerce)');
 }
 
@@ -57,6 +57,6 @@ export async function verifyInvoice(paymentHash: string): Promise<InvoiceStatus>
  * TODO(commerce): Real implementation.
  * Read from the seller's wallet instance. Cache for 10 seconds to avoid hammering.
  */
-export async function getWalletBalance(sellerId: string): Promise<bigint> {
+export async function getWalletBalance(_sellerId: string): Promise<bigint> {
   throw new Error('NOT_IMPLEMENTED: getWalletBalance — see TODO(commerce)');
 }
