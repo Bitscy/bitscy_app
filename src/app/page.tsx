@@ -11,7 +11,7 @@ export default function HomePage() {
           <h2 className="text-xl font-semibold">For the team</h2>
           <p className="text-text-muted">
             This is the starter scaffold. Each engineer&apos;s work lives in their owned directories.
-            See <code className="rounded bg-primary/10 px-1 py-0.5 text-sm">CLAUDE.md</code> at the
+            See <code className="rounded-sm bg-primary/10 px-1 py-0.5 text-sm">CLAUDE.md</code> at the
             root and inside each role&apos;s service directory.
           </p>
           <div className="space-y-2 text-sm">
