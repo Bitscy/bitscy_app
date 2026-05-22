@@ -50,3 +50,7 @@ prisma/dev.db-journal
 *.pem
 .turbo
 
+# Foreign package-manager lockfiles (project uses pnpm)
+package-lock.json
+yarn.lock
+
