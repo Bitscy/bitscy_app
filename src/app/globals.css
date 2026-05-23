@@ -1,6 +1,61 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+@theme {
+  --color-primary-50: #fbede6;
+  --color-primary-100: #f5d8c8;
+  --color-primary-500: #b85c38;
+  --color-primary-600: #9e4d2e;
+  --color-primary-700: #7a3b24;
+  --color-primary: #b85c38;
+
+  --color-secondary-500: #5c3d2e;
+  --color-secondary-600: #4a3023;
+  --color-secondary: #5c3d2e;
+
+  --color-accent-500: #e0b14a;
+  --color-accent-600: #c99935;
+  --color-accent: #e0b14a;
+
+  --color-background: #fffaf1;
+
+  --color-surface: #ffffff;
+
+  --color-text: #2c1810;
+  --color-text-muted: #8c7b6f;
+
+  --color-success: #4a7c59;
+  --color-error: #c04a3d;
+
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+
+  --text-base: 1rem;
+  --text-base--line-height: 1.5;
+
+  --spacing-touch: 2.75rem;
+}
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
+
+@utility touch-target {
+  /* Touch target enforcement */
+  @apply min-h-touch min-w-touch;
+}
 
 @layer base {
   html {
@@ -16,12 +71,5 @@
   /* Number formatting for sats and naira */
   .tabular-nums {
     font-variant-numeric: tabular-nums;
-  }
-}
-
-@layer components {
-  /* Touch target enforcement */
-  .touch-target {
-    @apply min-h-touch min-w-touch;
   }
 }
