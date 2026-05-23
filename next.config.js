@@ -1,13 +1,12 @@
 /** @type {import('next').NextConfig} */
-// Serwist's default mode is webpack-only (see serwist/serwist#54).
-// Dev runs Turbopack with PWA disabled; production build runs webpack
-// (via the --webpack flag in the build script) to generate sw.js.
-const withSerwist = require('@serwist/next').default({
-  swSrc: 'src/app/sw.ts',
-  swDest: 'public/sw.js',
-  disable: process.env.NODE_ENV === 'development',
-});
-
+// Serwist's default mode is webpack-only (see serwist/serwist#54). The
+// asymmetric export below keeps both bundlers happy:
+//   - `pnpm dev`   -> Turbopack. nextConfig is exported bare; @serwist/next
+//                     isn't even require()d, so no webpack hook is injected
+//                     AND no Serwist Turbopack-warning is emitted.
+//   - `pnpm build` -> webpack (via the --webpack flag in the build script).
+//                     NODE_ENV=production triggers the Serwist require+wrap,
+//                     which generates public/sw.js for the PWA service worker.
 const nextConfig = {
   reactStrictMode: true,
   async rewrites() {
@@ -35,4 +34,13 @@ const nextConfig = {
   },
 };
 
-module.exports = withSerwist(nextConfig);
+if (process.env.NODE_ENV === 'production') {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const withSerwist = require('@serwist/next').default({
+    swSrc: 'src/app/sw.ts',
+    swDest: 'public/sw.js',
+  });
+  module.exports = withSerwist(nextConfig);
+} else {
+  module.exports = nextConfig;
+}
