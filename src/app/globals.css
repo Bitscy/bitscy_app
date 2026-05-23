@@ -1,46 +1,148 @@
 @import 'tailwindcss';
+@import 'tw-animate-css';
 
-@theme {
-  --color-primary-50: #fbede6;
-  --color-primary-100: #f5d8c8;
-  --color-primary-500: #b85c38;
-  --color-primary-600: #9e4d2e;
-  --color-primary-700: #7a3b24;
-  --color-primary: #b85c38;
+@custom-variant dark (&:is(.dark *));
 
-  --color-secondary-500: #5c3d2e;
-  --color-secondary-600: #4a3023;
-  --color-secondary: #5c3d2e;
+:root {
+  --bitscy-background: #FBF7F0;
+  --bitscy-primary: #2D5F5D;
+  --bitscy-accent: #D67961;
+  --bitscy-gold: #E8B43D;
+  --bitscy-text: #1F1410;
+  --bitscy-muted: #7D6F66;
+  --bitscy-surface: #FFFFFF;
+  --bitscy-success: #4A7C59;
+  --bitscy-error: #B85049;
 
-  --color-accent-500: #e0b14a;
-  --color-accent-600: #c99935;
-  --color-accent: #e0b14a;
+  --background: #FBF7F0;
+  --foreground: #1F1410;
+  --card: #FFFFFF;
+  --card-foreground: #1F1410;
+  --popover: #FFFFFF;
+  --popover-foreground: #1F1410;
+  --primary: #2D5F5D;
+  --primary-foreground: #FFFFFF;
+  --secondary: #FBF7F0;
+  --secondary-foreground: #1F1410;
+  --muted: #7D6F66;
+  --muted-foreground: #7D6F66;
+  --accent: #D67961;
+  --accent-foreground: #FFFFFF;
+  --destructive: #B85049;
+  --destructive-foreground: #FFFFFF;
+  --border: #E8D4C5;
+  --input: #FBF7F0;
+  --ring: #D67961;
+  --chart-1: #D67961;
+  --chart-2: #2D5F5D;
+  --chart-3: #E8B43D;
+  --chart-4: #7D6F66;
+  --chart-5: #4A7C59;
+  --radius: 0.5rem;
+  --sidebar: #FBF7F0;
+  --sidebar-foreground: #1F1410;
+  --sidebar-primary: #2D5F5D;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #D67961;
+  --sidebar-accent-foreground: #FFFFFF;
+  --sidebar-border: #E8D4C5;
+  --sidebar-ring: #D67961;
+}
 
-  --color-background: #fffaf1;
+.dark {
+  --background: #1F1410;
+  --foreground: #FBF7F0;
+  --card: #2D2420;
+  --card-foreground: #FBF7F0;
+  --popover: #2D2420;
+  --popover-foreground: #FBF7F0;
+  --primary: #2D5F5D;
+  --primary-foreground: #FBF7F0;
+  --secondary: #3A3530;
+  --secondary-foreground: #FBF7F0;
+  --muted: #7D6F66;
+  --muted-foreground: #B8AFA2;
+  --accent: #D67961;
+  --accent-foreground: #1F1410;
+  --destructive: #B85049;
+  --destructive-foreground: #FBF7F0;
+  --border: #3A3530;
+  --input: #2D2420;
+  --ring: #D67961;
+  --chart-1: #D67961;
+  --chart-2: #2D5F5D;
+  --chart-3: #E8B43D;
+  --chart-4: #7D6F66;
+  --chart-5: #4A7C59;
+  --sidebar: #1F1410;
+  --sidebar-foreground: #FBF7F0;
+  --sidebar-primary: #2D5F5D;
+  --sidebar-primary-foreground: #FBF7F0;
+  --sidebar-accent: #D67961;
+  --sidebar-accent-foreground: #1F1410;
+  --sidebar-border: #3A3530;
+  --sidebar-ring: #D67961;
+}
 
-  --color-surface: #ffffff;
-
-  --color-text: #2c1810;
-  --color-text-muted: #8c7b6f;
-
-  --color-success: #4a7c59;
-  --color-error: #c04a3d;
-
+@theme inline {
   --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-serif: var(--font-dm-serif);
 
-  --text-base: 1rem;
-  --text-base--line-height: 1.5;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Bitscy palette exposed as Tailwind utilities (bg-bitscy-background, text-bitscy-text, etc.) */
+  --color-bitscy-background: var(--bitscy-background);
+  --color-bitscy-primary: var(--bitscy-primary);
+  --color-bitscy-accent: var(--bitscy-accent);
+  --color-bitscy-gold: var(--bitscy-gold);
+  --color-bitscy-text: var(--bitscy-text);
+  --color-bitscy-muted: var(--bitscy-muted);
+  --color-bitscy-surface: var(--bitscy-surface);
+  --color-bitscy-success: var(--bitscy-success);
+  --color-bitscy-error: var(--bitscy-error);
 
   --spacing-touch: 2.75rem;
 }
 
 /*
-  The default border color has changed to `currentcolor` in Tailwind CSS v4,
-  so we've added these compatibility styles to make sure everything still
-  looks the same as it did with Tailwind CSS v3.
-
-  If we ever want to remove these styles, we need to add an explicit border
-  color utility to any element that depends on these defaults.
+  Default border color changed to `currentcolor` in Tailwind v4.
+  Compat shim so elements without an explicit border color keep
+  rendering the v3 default.
 */
 @layer base {
   *,
@@ -53,22 +155,24 @@
 }
 
 @utility touch-target {
-  /* Touch target enforcement */
   @apply min-h-touch min-w-touch;
 }
 
 @layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
   html {
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
   }
 
   body {
-    @apply bg-background text-text;
+    @apply bg-background text-foreground;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
   }
 
-  /* Number formatting for sats and naira */
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
