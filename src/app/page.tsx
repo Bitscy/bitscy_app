@@ -1,4 +1,5 @@
-import { ChevronRight, Menu, X } from 'lucide-react'
+import Link from 'next/link'
+import { ChevronRight, Menu } from 'lucide-react'
 
 const PRODUCTS = [
   {
@@ -37,18 +38,18 @@ export default function LandingPage() {
       {/* Top Navigation */}
       <nav className="fixed top-0 z-50 w-full transition-all duration-300 bg-background/80 backdrop-blur-sm border-b border-border">
         <div className="mx-auto max-w-7xl px-5 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
-          <div className="font-serif text-2xl font-normal">Bitscy</div>
-          
+          <Link href="/" className="font-serif text-2xl font-normal">Bitscy</Link>
+
           <div className="hidden md:flex items-center gap-8">
-            <a href="#" className="font-sans text-sm hover:text-accent transition-colors">Marketplace</a>
-            <a href="#" className="font-sans text-sm hover:text-accent transition-colors">Sell on Bitscy</a>
-            <a href="#" className="font-sans text-sm hover:text-accent transition-colors">Sign in</a>
-            <button className="bg-primary text-primary-foreground px-6 py-2.5 rounded font-sans text-sm font-medium hover:opacity-90 transition-opacity">
+            <Link href="/marketplace" className="font-sans text-sm hover:text-accent transition-colors">Marketplace</Link>
+            <Link href="/sell" className="font-sans text-sm hover:text-accent transition-colors">Sell on Bitscy</Link>
+            <Link href="/signin" className="font-sans text-sm hover:text-accent transition-colors">Sign in</Link>
+            <Link href="/sell" className="bg-primary text-primary-foreground px-6 py-2.5 rounded font-sans text-sm font-medium hover:opacity-90 transition-opacity">
               Open your shop
-            </button>
+            </Link>
           </div>
 
-          <button className="md:hidden p-2">
+          <button className="md:hidden p-2" aria-label="Open menu">
             <Menu className="w-6 h-6" />
           </button>
         </div>
@@ -89,12 +90,12 @@ export default function LandingPage() {
               </ul>
 
               <div className="flex flex-col sm:flex-row gap-4 pt-4">
-                <button className="bg-primary text-primary-foreground px-8 py-3.5 rounded font-sans font-medium hover:opacity-90 transition-opacity">
+                <Link href="/sell" className="inline-flex items-center justify-center bg-primary text-primary-foreground px-8 py-3.5 rounded font-sans font-medium hover:opacity-90 transition-opacity">
                   Open your shop
-                </button>
-                <button className="border-2 border-primary text-primary px-8 py-3.5 rounded font-sans font-medium hover:bg-primary hover:text-primary-foreground transition-all">
+                </Link>
+                <Link href="/marketplace" className="inline-flex items-center justify-center border-2 border-primary text-primary px-8 py-3.5 rounded font-sans font-medium hover:bg-primary hover:text-primary-foreground transition-all">
                   Browse the marketplace
-                </button>
+                </Link>
               </div>
 
               <p className="font-sans text-xs text-muted pt-4">
@@ -119,14 +120,14 @@ export default function LandingPage() {
         <div className="mx-auto max-w-7xl px-5 sm:px-6 lg:px-8">
           <div className="flex items-baseline justify-between mb-8 sm:mb-12">
             <h2 className="font-serif text-4xl sm:text-5xl font-normal">Currently on Bitscy</h2>
-            <a href="#" className="font-sans text-sm text-primary hover:text-accent font-medium flex items-center gap-1 transition-colors">
+            <Link href="/marketplace" className="font-sans text-sm text-primary hover:text-accent font-medium flex items-center gap-1 transition-colors">
               See all <ChevronRight className="w-4 h-4" />
-            </a>
+            </Link>
           </div>
 
           <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
             {PRODUCTS.map((product) => (
-              <div key={product.id} className="group cursor-pointer">
+              <Link key={product.id} href={`/products/${product.id}`} className="group cursor-pointer">
                 <div className="relative overflow-hidden rounded-lg bg-gray-100 mb-3 h-48 sm:h-56 lg:h-64">
                   <img
                     src={product.image}
@@ -137,7 +138,7 @@ export default function LandingPage() {
                 <h3 className="font-serif text-base sm:text-lg font-normal mb-1">{product.title}</h3>
                 <p className="font-sans text-sm text-muted mb-2">{product.artist}</p>
                 <p className="font-sans text-base sm:text-lg font-medium text-accent">₦{product.price.toLocaleString()}</p>
-              </div>
+              </Link>
             ))}
           </div>
         </div>
@@ -156,9 +157,9 @@ export default function LandingPage() {
               <p className="font-sans text-base text-muted leading-relaxed">
                 Whether you're a painter in Lagos, a weaver in Kano, or a jeweller in Accra, Bitscy connects you to buyers worldwide who value your craft.
               </p>
-              <button className="bg-primary text-primary-foreground px-8 py-3.5 rounded font-sans font-medium hover:opacity-90 transition-opacity">
+              <Link href="/sell" className="inline-flex items-center justify-center bg-primary text-primary-foreground px-8 py-3.5 rounded font-sans font-medium hover:opacity-90 transition-opacity">
                 Open your shop
-              </button>
+              </Link>
             </div>
 
             {/* For Buyers */}
@@ -170,9 +171,9 @@ export default function LandingPage() {
               <p className="font-sans text-base text-muted leading-relaxed">
                 Pay from your phone. Get it delivered anywhere in the world. Every purchase supports the artist directly.
               </p>
-              <button className="border-2 border-primary text-primary px-8 py-3.5 rounded font-sans font-medium hover:bg-primary hover:text-primary-foreground transition-all">
+              <Link href="/marketplace" className="inline-flex items-center justify-center border-2 border-primary text-primary px-8 py-3.5 rounded font-sans font-medium hover:bg-primary hover:text-primary-foreground transition-all">
                 Browse the marketplace
-              </button>
+              </Link>
             </div>
           </div>
         </div>
@@ -183,7 +184,7 @@ export default function LandingPage() {
         <div className="mx-auto max-w-7xl px-5 sm:px-6 lg:px-8">
           <div className="max-w-3xl mx-auto">
             <h2 className="font-serif text-4xl sm:text-5xl font-normal mb-4">For artists: from your studio to the world</h2>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-12 mb-12">
               <div className="space-y-3">
                 <div className="font-serif text-5xl font-normal text-accent">1</div>
@@ -206,9 +207,9 @@ export default function LandingPage() {
               Our payment network works across every country, without banks or middlemen blocking the path. You never have to think about it — it just works.
             </p>
 
-            <button className="bg-primary text-primary-foreground px-8 py-3.5 rounded font-sans font-medium hover:opacity-90 transition-opacity">
+            <Link href="/sell" className="inline-flex items-center justify-center bg-primary text-primary-foreground px-8 py-3.5 rounded font-sans font-medium hover:opacity-90 transition-opacity">
               Open your shop
-            </button>
+            </Link>
           </div>
         </div>
       </section>
@@ -218,7 +219,7 @@ export default function LandingPage() {
         <div className="mx-auto max-w-7xl px-5 sm:px-6 lg:px-8">
           <div className="max-w-3xl mx-auto">
             <h2 className="font-serif text-4xl sm:text-5xl font-normal mb-4">For buyers: support the maker, not the middleman</h2>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mt-12 mb-12">
               <div className="space-y-3">
                 <div className="font-serif text-5xl font-normal text-accent">1</div>
@@ -241,9 +242,9 @@ export default function LandingPage() {
               Our payment network is built to work globally, without the delays and fees that plague traditional platforms. You pay what you see — nothing hidden.
             </p>
 
-            <button className="border-2 border-primary text-primary px-8 py-3.5 rounded font-sans font-medium hover:bg-primary hover:text-primary-foreground transition-all">
+            <Link href="/marketplace" className="inline-flex items-center justify-center border-2 border-primary text-primary px-8 py-3.5 rounded font-sans font-medium hover:bg-primary hover:text-primary-foreground transition-all">
               Browse the marketplace
-            </button>
+            </Link>
           </div>
         </div>
       </section>
@@ -262,7 +263,7 @@ export default function LandingPage() {
 
             <div className="space-y-6">
               <h2 className="font-serif text-4xl sm:text-5xl font-normal">Why Bitscy exists</h2>
-              
+
               <p className="font-sans text-base text-muted leading-relaxed">
                 Three years ago, a Nigerian painter in Lagos wanted to sell her work online. PayPal doesn't support Nigeria. Stripe doesn't either. Etsy's payment processor blocked her. She paused her practice because the world's largest platforms were built for everywhere except where she is.
               </p>
@@ -283,14 +284,14 @@ export default function LandingPage() {
       <section className="py-10 sm:py-24">
         <div className="mx-auto max-w-2xl px-5 sm:px-6 text-center">
           <h2 className="font-serif text-5xl sm:text-6xl font-normal mb-8">Ready to begin?</h2>
-          
+
           <div className="flex flex-col sm:flex-row gap-4 justify-center mb-12">
-            <button className="bg-primary text-primary-foreground px-8 py-4 rounded font-sans font-medium text-lg hover:opacity-90 transition-opacity">
+            <Link href="/sell" className="inline-flex items-center justify-center bg-primary text-primary-foreground px-8 py-4 rounded font-sans font-medium text-lg hover:opacity-90 transition-opacity">
               Open your shop
-            </button>
-            <button className="border-2 border-primary text-primary px-8 py-4 rounded font-sans font-medium text-lg hover:bg-primary hover:text-primary-foreground transition-all">
+            </Link>
+            <Link href="/marketplace" className="inline-flex items-center justify-center border-2 border-primary text-primary px-8 py-4 rounded font-sans font-medium text-lg hover:bg-primary hover:text-primary-foreground transition-all">
               Browse the marketplace
-            </button>
+            </Link>
           </div>
 
           <p className="font-sans text-sm text-muted whitespace-nowrap">
@@ -311,26 +312,26 @@ export default function LandingPage() {
             <div>
               <h4 className="font-sans font-semibold text-sm mb-4">Platform</h4>
               <ul className="space-y-2">
-                <li><a href="#" className="font-sans text-sm text-muted hover:text-accent transition-colors">Marketplace</a></li>
-                <li><a href="#" className="font-sans text-sm text-muted hover:text-accent transition-colors">Sell on Bitscy</a></li>
-                <li><a href="#" className="font-sans text-sm text-muted hover:text-accent transition-colors">Browse</a></li>
+                <li><Link href="/marketplace" className="font-sans text-sm text-muted hover:text-accent transition-colors">Marketplace</Link></li>
+                <li><Link href="/sell" className="font-sans text-sm text-muted hover:text-accent transition-colors">Sell on Bitscy</Link></li>
+                <li><Link href="/marketplace" className="font-sans text-sm text-muted hover:text-accent transition-colors">Browse</Link></li>
               </ul>
             </div>
 
             <div>
               <h4 className="font-sans font-semibold text-sm mb-4">Company</h4>
               <ul className="space-y-2">
-                <li><a href="#" className="font-sans text-sm text-muted hover:text-accent transition-colors">About</a></li>
-                <li><a href="#" className="font-sans text-sm text-muted hover:text-accent transition-colors">FAQ</a></li>
-                <li><a href="#" className="font-sans text-sm text-muted hover:text-accent transition-colors">Contact</a></li>
+                <li><Link href="/about" className="font-sans text-sm text-muted hover:text-accent transition-colors">About</Link></li>
+                <li><Link href="/faq" className="font-sans text-sm text-muted hover:text-accent transition-colors">FAQ</Link></li>
+                <li><Link href="/contact" className="font-sans text-sm text-muted hover:text-accent transition-colors">Contact</Link></li>
               </ul>
             </div>
 
             <div>
               <h4 className="font-sans font-semibold text-sm mb-4">Legal</h4>
               <ul className="space-y-2">
-                <li><a href="#" className="font-sans text-sm text-muted hover:text-accent transition-colors">Terms</a></li>
-                <li><a href="#" className="font-sans text-sm text-muted hover:text-accent transition-colors">Privacy</a></li>
+                <li><Link href="/terms" className="font-sans text-sm text-muted hover:text-accent transition-colors">Terms</Link></li>
+                <li><Link href="/privacy" className="font-sans text-sm text-muted hover:text-accent transition-colors">Privacy</Link></li>
               </ul>
             </div>
           </div>
