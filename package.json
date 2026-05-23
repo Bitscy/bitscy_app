@@ -13,10 +13,14 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
-    "format": "prettier --write \"src/**/*.{ts,tsx,md}\""
+    "format": "prettier --write \"src/**/*.{ts,tsx,md}\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@breeztech/breez-sdk-liquid": "0.9.2-rc1",
+    "@breeztech/breez-sdk-spark": "^0.15.0",
     "@hookform/resolvers": "^3.9.1",
     "@prisma/client": "^6.19.3",
     "@radix-ui/react-accordion": "1.2.12",
@@ -83,6 +87,7 @@
     "@types/react": "19.2.15",
     "@types/react-dom": "19.2.3",
     "@types/web-push": "^3.6.4",
+    "@vitest/coverage-v8": "^2.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "postcss": "^8.5.1",
@@ -90,7 +95,8 @@
     "prisma": "^6.19.3",
     "tailwindcss": "^4.3.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vitest": "^2.0.0"
   },
   "engines": {
     "node": ">=22.0.0"

@@ -102,6 +102,7 @@ export async function createOrder(params: CreateOrderParams): Promise<Order> {
   // Generate Lightning invoice. Errors leave the order in DB as PENDING;
   // a cleanup job can cancel expired invoices without affecting the order ID.
   const invoice = await lightningClient.createInvoice({
+    sellerId: product.sellerId,
     sellerLightningAddress: seller.lightningAddress,
     amountSats: totalSats,
     description: `Bitscy order #${order.id} — ${product.title}`,
@@ -289,7 +290,11 @@ export async function initiatePayout(
     throw new ApiError('NOT_FOUND', 'Bank account not found', 404);
   }
 
-  const result = await payoutService.initiatePayoutRequest(amountSats, bankAccountId);
+  const result = await payoutService.initiatePayoutRequest(amountSats, bankAccountId, {
+    accountName: account.accountName,
+    accountNumber: account.accountNumber,
+    bankName: account.bankName,
+  });
 
   // Persist the payout record for history and status polling
   await repository.createPayout({

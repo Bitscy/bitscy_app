@@ -28,6 +28,7 @@ export async function GET(
 
     const lightningAddress = seller.lightningAddress;
     const invoice = await lightningClient.createInvoice({
+      sellerId: seller.id,
       sellerLightningAddress: lightningAddress,
       amountSats,
       description: `Payment to ${seller.displayName ?? seller.username} on Bitscy`,

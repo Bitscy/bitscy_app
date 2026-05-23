@@ -1,25 +1,35 @@
 import { randomBytes } from 'crypto';
 import type { LightningInvoice, InvoiceStatus } from '@/types/shared';
+import { extractPaymentHash } from './bolt11';
+import { getSellerWallet, trackInvoice, findSettlement } from './wallet-manager';
 
 /**
- * Lightning client wrapping Breez SDK Nodeless.
+ * Lightning client — wraps Breez SDK Spark with a mock fallback.
  *
- * In production, set BREEZ_API_KEY and USE_MOCK_LIGHTNING=false.
- * In development / demo, the mock generates realistic invoices and
- * auto-settles after MOCK_SETTLE_MS so the full UI flow can be demoed.
+ * USE_MOCK_LIGHTNING=true  → mock (local dev, no API key needed)
+ * USE_MOCK_LIGHTNING=false + BREEZ_API_KEY set → real Breez SDK Spark
  *
- * TODO(commerce-v2): plug in the real Breez SDK when BREEZ_API_KEY is live.
- * Real implementation:
- *   import { connect, defaultConfig, LiquidNetwork, PaymentMethod } from '@breeztech/breez-sdk-liquid';
- *   const sdk = await connect({ mnemonic, config });
- *   const prep = await sdk.prepareReceivePayment({ paymentMethod: { type: 'lightning' }, payerAmountSat });
- *   const { destination: bolt11 } = await sdk.receivePayment({ prepareResponse: prep });
+ * The public API surface is identical in both modes. Callers never know which
+ * path is active. Switching to real on the server is a single env-var change.
  */
 
-const USE_MOCK = process.env.USE_MOCK_LIGHTNING !== 'false' || !process.env.BREEZ_API_KEY;
+const USE_MOCK =
+  process.env.USE_MOCK_LIGHTNING === 'true' || !process.env.BREEZ_API_KEY;
 
 // ============================================================================
-// In-memory mock state (resets on server restart — fine for demo)
+// Shared types
+// ============================================================================
+
+export interface CreateInvoiceParams {
+  sellerId: string;
+  sellerLightningAddress: string;
+  amountSats: bigint;
+  description: string;
+  expirySeconds?: number;
+}
+
+// ============================================================================
+// Mock implementation (local dev / demo without real Lightning)
 // ============================================================================
 
 interface MockInvoiceRecord {
@@ -37,13 +47,11 @@ declare global {
 }
 
 function getMockStore(): Map<string, MockInvoiceRecord> {
-  if (!globalThis.__mockInvoices) {
-    globalThis.__mockInvoices = new Map();
-  }
+  if (!globalThis.__mockInvoices) globalThis.__mockInvoices = new Map();
   return globalThis.__mockInvoices;
 }
 
-const MOCK_SETTLE_MS = 30_000; // auto-settle after 30s for demo flow
+const MOCK_SETTLE_MS = 30_000;
 const MOCK_EXPIRY_SECONDS = 3600;
 
 function generatePaymentHash(): string {
@@ -51,16 +59,10 @@ function generatePaymentHash(): string {
 }
 
 function generateMockBolt11(amountSats: bigint): string {
-  // Generates a plausible-looking (but not payable) BOLT-11 string for UI display.
-  // Format: lnbc<amount>n1<random_bech32_data>
   const amountMsat = amountSats * 1000n;
   const randomData = randomBytes(64).toString('hex');
   return `lnbc${amountMsat}n1${randomData}`;
 }
-
-// ============================================================================
-// Mock implementation
-// ============================================================================
 
 async function mockCreateInvoice(params: CreateInvoiceParams): Promise<LightningInvoice> {
   const paymentHash = generatePaymentHash();
@@ -68,19 +70,16 @@ async function mockCreateInvoice(params: CreateInvoiceParams): Promise<Lightning
   const expirySeconds = params.expirySeconds ?? MOCK_EXPIRY_SECONDS;
   const expiresAt = new Date(Date.now() + expirySeconds * 1000);
 
-  const record: MockInvoiceRecord = {
+  getMockStore().set(paymentHash, {
     bolt11,
     paymentHash,
     amountSats: params.amountSats,
     expiresAt,
     settled: false,
     settledAt: null,
-  };
-
-  getMockStore().set(paymentHash, record);
+  });
 
   // Auto-settle after MOCK_SETTLE_MS so the full purchase flow demos without a real wallet.
-  // In production, settlement comes from the Breez webhook instead.
   setTimeout(() => {
     const r = getMockStore().get(paymentHash);
     if (r && !r.settled) {
@@ -99,9 +98,7 @@ async function mockCreateInvoice(params: CreateInvoiceParams): Promise<Lightning
 
 async function mockVerifyInvoice(paymentHash: string): Promise<InvoiceStatus> {
   const record = getMockStore().get(paymentHash);
-  if (!record) {
-    return { paymentHash, settled: false, settledAt: null };
-  }
+  if (!record) return { paymentHash, settled: false, settledAt: null };
   return {
     paymentHash,
     settled: record.settled,
@@ -110,14 +107,12 @@ async function mockVerifyInvoice(paymentHash: string): Promise<InvoiceStatus> {
 }
 
 async function mockGetWalletBalance(_sellerId: string): Promise<bigint> {
-  // Return a plausible demo balance
-  return 250_000n; // 250,000 sats
+  return 250_000n; // plausible demo balance
 }
 
 /**
- * Dev/demo only: manually settle an invoice by payment hash.
- * Used by the test endpoint POST /api/dev/settle so the demo can be shown
- * without a real Lightning payment.
+ * Dev/demo only: manually settle a mock invoice by payment hash.
+ * Used by POST /api/dev/settle so the demo works without a real Lightning wallet.
  */
 export function mockSettleInvoice(paymentHash: string): boolean {
   const record = getMockStore().get(paymentHash);
@@ -128,55 +123,92 @@ export function mockSettleInvoice(paymentHash: string): boolean {
 }
 
 // ============================================================================
+// Real Breez SDK Spark implementation
+// ============================================================================
+
+async function realCreateInvoice(params: CreateInvoiceParams): Promise<LightningInvoice> {
+  const { sdk, settlementStore } = await getSellerWallet(params.sellerId);
+
+  const expirySeconds = params.expirySeconds ?? 3600;
+
+  // receivePayment returns { paymentRequest: string (BOLT11), feeSats: number }
+  const { paymentRequest } = await sdk.receivePayment({
+    paymentMethod: {
+      type: 'bolt11Invoice',
+      description: params.description,
+      amountSats: Number(params.amountSats),
+      expirySecs: expirySeconds,
+    },
+  });
+
+  const paymentHash = extractPaymentHash(paymentRequest);
+  const expiresAt = new Date(Date.now() + expirySeconds * 1000);
+
+  // Seed the settlement store so verifyInvoice() has a record to return
+  // even before the event listener fires.
+  if (!settlementStore.has(paymentHash)) {
+    settlementStore.set(paymentHash, { settled: false, settledAt: null });
+  }
+  // Also track via the global helper (covers cross-wallet lookups)
+  trackInvoice(params.sellerId, paymentHash);
+
+  return {
+    bolt11: paymentRequest,
+    paymentHash,
+    amountSats: params.amountSats.toString(),
+    expiresAt: expiresAt.toISOString(),
+  };
+}
+
+async function realVerifyInvoice(paymentHash: string): Promise<InvoiceStatus> {
+  // The event listener on the seller's SDK instance updates findSettlement().
+  // No polling of Breez is needed — the event is the source of truth.
+  const record = findSettlement(paymentHash);
+  if (!record) return { paymentHash, settled: false, settledAt: null };
+  return {
+    paymentHash,
+    settled: record.settled,
+    settledAt: record.settledAt?.toISOString() ?? null,
+  };
+}
+
+async function realGetWalletBalance(sellerId: string): Promise<bigint> {
+  const { sdk } = await getSellerWallet(sellerId);
+  // ensureSynced: false avoids blocking the request on a full network sync.
+  const info = await sdk.getInfo({ ensureSynced: false });
+  return BigInt(Math.round(info.balanceSats));
+}
+
+// ============================================================================
 // Public API
 // ============================================================================
 
-interface CreateInvoiceParams {
-  sellerLightningAddress: string;
-  amountSats: bigint;
-  description: string;
-  expirySeconds?: number;
-}
-
 /**
- * Generate a Lightning invoice payable to a seller's Lightning Address.
- *
- * Mock mode: generates a fake but realistic BOLT-11 + payment hash.
- * Real mode: resolves the LNURL-pay flow via the seller's Breez wallet.
+ * Generate a Lightning invoice for an order.
+ * Mock: fake BOLT11, auto-settles after 30s.
+ * Real: Breez SDK receivePayment() → actual payable BOLT11.
  */
 export async function createInvoice(params: CreateInvoiceParams): Promise<LightningInvoice> {
   if (USE_MOCK) return mockCreateInvoice(params);
-
-  // TODO(commerce-v2): real Breez implementation
-  // 1. Resolve Lightning Address via /.well-known/lnurlp/<username> to get LNURL metadata
-  // 2. POST to the callback URL with amount in millisats
-  // 3. Receive bolt11 from the response
-  // 4. Parse paymentHash from the BOLT-11
-  // 5. Return LightningInvoice shape
-  throw new Error(
-    'Real Breez createInvoice not implemented — set USE_MOCK_LIGHTNING=true for demo',
-  );
+  return realCreateInvoice(params);
 }
 
 /**
  * Check whether a Lightning invoice has been settled.
+ * Mock: reads in-memory mock store.
+ * Real: reads the settlement map populated by the Breez event listener.
  */
 export async function verifyInvoice(paymentHash: string): Promise<InvoiceStatus> {
   if (USE_MOCK) return mockVerifyInvoice(paymentHash);
-
-  // TODO(commerce-v2): query Breez SDK for payment status
-  // const sdk = await getSellerSdk(sellerId);
-  // const payment = await sdk.getPayment({ paymentHash });
-  // return { paymentHash, settled: payment?.status === 'complete', settledAt: ... };
-  throw new Error('Real Breez verifyInvoice not implemented');
+  return realVerifyInvoice(paymentHash);
 }
 
 /**
- * Get a seller's current balance in sats from their Breez wallet.
+ * Get a seller's current sats balance from their Breez wallet.
+ * Mock: returns 250,000 sats.
+ * Real: queries sdk.getInfo().balanceSats.
  */
 export async function getWalletBalance(sellerId: string): Promise<bigint> {
   if (USE_MOCK) return mockGetWalletBalance(sellerId);
-
-  // TODO(commerce-v2): const sdk = await getSellerSdk(sellerId); return BigInt(await sdk.getInfo().then(i => i.walletInfo.balanceSat));
-  throw new Error('Real Breez getWalletBalance not implemented');
+  return realGetWalletBalance(sellerId);
 }
