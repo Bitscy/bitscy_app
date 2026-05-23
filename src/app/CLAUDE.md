@@ -2,6 +2,19 @@
 
 You're working in the Experience role's code. The root `CLAUDE.md` covers project-wide context, shared types, conventions, and out-of-scope features. This file adds Experience-specific context on top.
 
+## Stack quick-reference (one-line facts that often drift)
+
+- **Next.js 16** App Router. Dev: Turbopack. Prod build: `next build --webpack` (intentional — Serwist needs webpack).
+- **React 19**. Server components by default; mark client components with `'use client'`.
+- **Dynamic route `params` are Promises** in Next 16 — page components are `async` and `await params`.
+- **Tailwind 4, CSS-first.** All design tokens live in `@theme` blocks inside `src/app/globals.css`. There is no `tailwind.config.ts`.
+- **Fonts:** Inter (body, `font-sans`) and DM Serif Display (headings, `font-serif`), both via `next/font/google` in `src/app/layout.tsx`.
+- **PWA:** `@serwist/next` (not `next-pwa`). Service worker source at `src/app/sw.ts`. Only loaded in production builds via a conditional `require` in `next.config.js`.
+- **UI primitives:** shadcn (new-york style), in `src/components/ui/`, backed by Radix. `cn()` in `src/lib/utils.ts`.
+- **Hooks:** custom hooks in `src/hooks/` (e.g., `use-mobile`, `use-toast`).
+- **State:** Zustand stores in `src/store/`. No Redux, no Context for global state.
+- **Package manager:** pnpm 9.
+
 ## What this role owns
 
 Everything Adaeze and Tobi see. Every pixel, every transition, every error message. Plus the infrastructure that delivers it to their phones.
@@ -36,57 +49,64 @@ You consume APIs through typed interfaces from `src/types/shared.ts`. If a field
 
 Inside `src/app/`:
 
-**Marketplace pages (public):**
+**Marketing / public pages:**
 
-- `/` — home page, product browse
+- `/` — marketing landing page (hero, featured products preview, value props, how-it-works, mission, closing CTA, footer). The product surface; copy- and image-driven, not data-driven.
+- `/marketplace` — browse grid (the actual product catalog). Was at `/` before the landing page took over.
 - `/products/[id]` — product detail
-- `/shop/[username]` — seller storefront
+- `/shop/[username]` — seller storefront *(not yet implemented)*
 - `/checkout/[orderId]` — Lightning invoice + QR display
-- `/checkout/[orderId]/success` — order success screen
+- `/checkout/[orderId]/success` — order success screen *(not yet implemented)*
+- `/about`, `/faq`, `/contact`, `/terms`, `/privacy` — informational pages linked from the landing-page footer *(not yet implemented; the links 404 today)*
 
 **Dashboard pages (auth required):**
 
 - `/seller` — seller dashboard home (balance, recent orders)
-- `/seller/products` — manage listings
-- `/seller/products/new` — create listing
-- `/seller/products/[id]/edit` — edit listing
-- `/seller/orders` — incoming orders
-- `/seller/orders/[id]` — order detail (decrypt shipping address)
-- `/seller/withdraw` — bank withdrawal flow
-- `/buyer/orders` — buyer's order history
-- `/buyer/orders/[id]` — buyer's order detail
+- `/seller/products` — manage listings *(not yet implemented)*
+- `/seller/products/new` — create listing *(not yet implemented)*
+- `/seller/products/[id]/edit` — edit listing *(not yet implemented)*
+- `/seller/orders` — incoming orders *(not yet implemented)*
+- `/seller/orders/[id]` — order detail (decrypt shipping address) *(not yet implemented)*
+- `/seller/withdraw` — bank withdrawal flow *(not yet implemented)*
+- `/buyer/orders` — buyer's order history *(not yet implemented)*
+- `/buyer/orders/[id]` — buyer's order detail *(not yet implemented)*
 
-**Auth pages:**
+**Auth / onboarding pages:**
 
-- `/signup` — new user
-- `/login` — existing user (NIP-07 or passphrase)
+- `/sell` — seller onboarding entry point (landing-page "Open your shop" target) *(not yet implemented)*
+- `/signin` — existing user sign-in (NIP-07 or passphrase) *(not yet implemented)*
+- `/signup` — new buyer signup *(not yet implemented)*
+
+The landing-page CTAs already point at `/sell` and `/signin`. When you scaffold those pages, do not change the route names without also updating `src/app/page.tsx`.
 
 ## Design system
 
 The visual identity is warm, earth-tone, dignified. Not crypto-techno-blue. Not generic-fintech-purple. Think _trusted Nigerian community institution that happens to be modern._
 
-**Color palette** (lives in `tailwind.config.ts`):
+**Color palette** (lives in `src/app/globals.css` as `@theme inline` tokens — Tailwind 4 is CSS-first, there is no `tailwind.config.ts`):
 
 ```
-primary:    #B85C38  // warm terracotta
-secondary:  #5C3D2E  // deep brown
-accent:     #E0B14A  // muted gold
-background: #FFFAF1  // warm cream
+primary:    #2D5F5D  // deep indigo-green (the trust anchor)
+accent:     #D67961  // warm coral (every CTA, every emphasis)
+gold:       #E8B43D  // saffron / muted gold (numerals, accents)
+background: #FBF7F0  // warm sand
 surface:    #FFFFFF
-text:       #2C1810  // very dark brown
-muted:      #8C7B6F  // warm gray
+foreground: #1F1410  // very dark brown (the "text" color)
+muted:      #7D6F66  // warm gray
 success:    #4A7C59  // muted green
-error:      #C04A3D  // muted red, similar tone to primary
+error:      #B85049  // muted red, also serves as `destructive`
 ```
 
-These are starting points. The team can refine. Once locked, don't introduce arbitrary new colors.
+These are locked. Adding new colors needs a coordinated edit to `globals.css`. The earlier terracotta palette (#B85C38 primary, #E0B14A accent) was the placeholder used while the v0 design was being worked on; if you see it referenced anywhere, treat that as stale doc and update it.
+
+Both shadcn-style vars (`--background`, `--foreground`, `--primary`, ...) and a Bitscy-namespaced set (`--color-bitscy-background`, `--color-bitscy-text`, ...) are exposed as Tailwind utilities, so `bg-background` / `bg-bitscy-background` / `text-muted` / `text-bitscy-text` all compile.
 
 **Typography:**
 
-- Headings: Inter, semi-bold, generous leading
-- Body: Inter, regular, 16px minimum on mobile
-- Numbers (sats, naira): tabular-nums variant for alignment
-- Never use system font; load Inter via `next/font`
+- Headings: **DM Serif Display**, 400 weight, generous leading. Use `font-serif`.
+- Body: **Inter**, regular, 16px minimum on mobile. Use `font-sans` (default).
+- Numbers (sats, naira): tabular-nums variant for alignment via the `.tabular-nums` helper class.
+- Never use system font; both Inter and DM Serif Display are loaded via `next/font/google` in `src/app/layout.tsx` and wired through the `--font-inter` / `--font-dm-serif` CSS variables.
 
 **Spacing:**
 
@@ -105,7 +125,9 @@ These are starting points. The team can refine. Once locked, don't introduce arb
 
 ## PWA setup
 
-The PWA is configured via `next-pwa` in `next.config.js`. See the root CLAUDE.md for the configuration snippet.
+The PWA is configured via **`@serwist/next`** (NOT `next-pwa`/`@ducanh2912/next-pwa`). The service worker source lives at `src/app/sw.ts`; Serwist generates `public/sw.js` at production build time. See the root CLAUDE.md and `next.config.js` for the exact wiring.
+
+`next.config.js` uses a **conditional `require`** so Serwist is only loaded when `NODE_ENV === 'production'`. In dev (Turbopack), Serwist is not loaded at all — no webpack hook is injected and Turbopack runs clean. The production build runs with `next build --webpack` (the `--webpack` flag is intentional; see the comment at the top of `next.config.js`) and Serwist regenerates `public/sw.js`.
 
 **The manifest** (`public/manifest.json`):
 
@@ -113,9 +135,9 @@ The PWA is configured via `next-pwa` in `next.config.js`. See the root CLAUDE.md
 - Short name: "Bitscy"
 - Display: `standalone` (full-screen, no browser chrome)
 - Orientation: `portrait`
-- Theme color: `#2C1810` (matches text color)
-- Background color: `#FFFAF1` (matches our cream background)
-- Icons: 192×192 and 512×512 PNGs in `public/icons/`
+- Theme color: `#2C1810` (the manifest still uses the old dark-brown for `theme_color`; update to `#1F1410` when you next touch the manifest)
+- Background color: `#FFFAF1` (sand — matches `--background`)
+- Icons: 192×192 and 512×512 PNGs in `public/icons/` — ⚠️ the directory currently contains only `.gitkeep`. The referenced icons (`icon-192.png`, `icon-512.png`, `maskable-icon-512.png`) need to be added before the PWA install flow works end-to-end.
 
 **Service worker caching strategy:**
 
@@ -328,13 +350,15 @@ Cloudinary setup:
 
 ## Known gotchas
 
-- **Service worker caches aggressively in dev.** Disable PWA in `next.config.js` for development (already configured). If you see stale assets in production, version the cache name on deploy.
+- **Service worker only runs in production builds.** The `next.config.js` conditional `require('@serwist/next')` keeps it out of dev entirely, so Turbopack runs clean. If you see stale assets in production, version the cache name in `src/app/sw.ts` on deploy.
+- **`next dev` runs Turbopack; `next build --webpack` runs webpack.** The asymmetry is intentional — Serwist's default mode is webpack-only. Don't remove the `--webpack` flag from the build script unless you've migrated to `@serwist/turbopack` (experimental).
 - **iOS PWA quirks.** Push notifications require home-screen installation (iOS 16.4+). Some browser APIs are restricted in PWA mode on iOS. Test on a real iPhone before assuming features work.
 - **IndexedDB quotas.** Browsers can evict IndexedDB data when storage is low. Don't rely on it as the only copy of critical data. The user's Nostr key is critical — offer export to a recovery phrase early.
-- **Tailwind purge in production.** If a class is only used dynamically (e.g., `bg-${color}-500`), Tailwind purges it. Use the safelist in `tailwind.config.ts` or use static class strings.
+- **Tailwind 4 is CSS-first; there is no `tailwind.config.ts`.** All tokens live in `@theme` blocks inside `src/app/globals.css`. If a class is only used dynamically (e.g., `bg-${color}-500`), Tailwind 4 won't see it — prefer static class strings, or pre-declare a dummy reference somewhere in source so the JIT picks it up.
 - **Next.js App Router server components.** By default, pages are server components. Mark client components with `'use client'` at the top. Hooks (`useState`, `useEffect`, Zustand) require client components.
-- **next/image domains.** Add Cloudinary domain to `next.config.js` `images.domains` array so Next.js Image works on Cloudinary URLs.
+- **`next/image` remote hosts.** `next.config.js` uses `images.remotePatterns` (not the older `domains` array). Cloudinary's `res.cloudinary.com` is already allowed; add new hosts there. Note that the marketing landing page currently uses plain `<img>` tags pointing at `images.unsplash.com`, so it doesn't need a `remotePatterns` entry — but if any of those switch to `next/image` you'll need to add the Unsplash host.
 - **Hydration mismatches.** Anything that differs between server and client render (like reading from localStorage on first paint) causes hydration errors. Use `useEffect` for client-only state, or `dynamic(() => import(...), { ssr: false })`.
+- **Next 16 dynamic route params are Promises.** `params` is `Promise<{ ... }>` not `{ ... }`. Page components must be `async` and `await params`. This catches anyone copying from a Next 14/15 v0 snippet.
 
 ## Component organization
 
@@ -359,42 +383,41 @@ Components that are used in only one page can live alongside the page. Reusable 
 
 Build in this order. Pages depend on backend endpoints from Catalog/Commerce; features marked **[blocked by X]** can't be completed until that backend feature exists. You can scaffold the UI shell earlier with stub data, but full functionality requires the backend.
 
-### Feature X1 — Design system foundation
+### Feature X1 — Design system foundation ✅ done
 
-**Prerequisites:** Tailwind installed. Color palette, typography, spacing defined.
+**Status:** complete as of the v0 integration. Documented here for future engineers reading the build sequence top-to-bottom.
 
-**Build:**
+**What's in place:**
 
-- Set up `tailwind.config.ts` with the Bitscy color palette, font family (Inter), spacing scale.
-- Configure `next/font` to load Inter.
-- Create `src/lib/styles.ts` for shared style constants (button variants, card classes, etc.).
-- Build the base UI primitives in `src/components/ui/`: `Button`, `Input`, `Card`, `Modal`, `Skeleton`.
+- Bitscy color palette + spacing + typography tokens are defined as `@theme` directives in `src/app/globals.css`. There is no `tailwind.config.ts`.
+- Both Inter and DM Serif Display are loaded via `next/font/google` in `src/app/layout.tsx` and exposed as `--font-inter` / `--font-dm-serif` CSS variables. The `font-sans` and `font-serif` Tailwind utilities resolve through them.
+- The full shadcn (`new-york` style) primitive set lives in `src/components/ui/` (57 files), backed by Radix UI primitives. `cn()` is in `src/lib/utils.ts`.
 
-**Smoke test:** Create a `/dev/styleguide` page (not deployed) that renders every primitive. Visually verify color, typography, sizing.
-
-**Acceptance criteria:**
-
-- Every primitive looks like the v0 design references.
-- Mobile viewport (360×640) renders cleanly with no horizontal scroll.
-- All buttons have ≥44×44px tap targets.
-- Inter is loaded via `next/font` (verify in DevTools — no system font fallback).
+**If you're updating tokens:** edit `src/app/globals.css` directly. If you're adding a new shadcn primitive: `pnpm dlx shadcn@latest add <component>` — the CLI is configured via `components.json` at the repo root.
 
 ---
 
-### Feature X2 — PWA setup
+### Feature X2 — PWA setup ✅ partly done
 
-**Prerequisites:** X1 complete. PNG icons (192×192, 512×512) in `public/icons/`.
+**Status:** Serwist + manifest + layout metadata are wired. Icons and the `InstallPrompt` component are outstanding.
 
-**Build:**
+**What's in place:**
 
-- Configure `@ducanh2912/next-pwa` in `next.config.js`.
-- Create `public/manifest.json` with Bitscy branding.
-- Add metadata to `app/layout.tsx`: theme-color meta tag, viewport, manifest link.
-- Build the `InstallPrompt` component (shows after engagement signal).
+- `@serwist/next` is wired in `next.config.js` with a conditional `require` (dev runs Turbopack with no Serwist; prod runs `next build --webpack` and Serwist generates `public/sw.js`).
+- `src/app/sw.ts` is the service worker source.
+- `public/manifest.json` exists with Bitscy branding (standalone, portrait, theme `#2C1810`, background `#FBF7F0`).
+- `src/app/layout.tsx` includes `manifest: '/manifest.json'`, `appleWebApp`, and the `themeColor` viewport export.
 
-**Smoke test:**
+**Outstanding (the remaining X2 scope):**
 
-- Build with `pnpm build && pnpm start`.
+- Populate `public/icons/` with `icon-192.png`, `icon-512.png`, `maskable-icon-512.png`. The manifest already references these paths.
+- Build the `InstallPrompt` component (shows after engagement signal — first product viewed, etc.).
+- Decide and document the actual Serwist runtime-caching strategies in `src/app/sw.ts`. The aspirational strategy is at the top of this file under "Service worker caching strategy" — implement it there.
+- Optional: update `theme_color` in the manifest to `#1F1410` to match the current `--foreground`.
+
+**Smoke test (when complete):**
+
+- `pnpm build && pnpm start`.
 - Open in Chrome on Android.
 - DevTools → Application → Manifest: should show all icons and metadata.
 - Lighthouse PWA audit: should be at least 90/100.
@@ -403,11 +426,9 @@ Build in this order. Pages depend on backend endpoints from Catalog/Commerce; fe
 **Acceptance criteria:**
 
 - Lighthouse PWA score ≥ 90.
-- Service worker registers in production build, NOT in dev (`disable: NODE_ENV === 'development'`).
+- Service worker registers in production build only (the conditional `require` in `next.config.js` guarantees this).
 - App opens in standalone mode after install (no browser chrome).
 - Icons display correctly at all sizes (no pixelation on 512×512 splash).
-
-**Risks:** Service worker caching in dev breaks hot reload. Confirm it's disabled in dev.
 
 ---
 
@@ -431,20 +452,22 @@ Build in this order. Pages depend on backend endpoints from Catalog/Commerce; fe
 
 ---
 
-### Feature X4 — Home page (browse) [blocked by Catalog C6]
+### Feature X4 — Browse page [blocked by Catalog C6]
 
 **Prerequisites:** X3 complete. Catalog `GET /api/products` working.
 
+**Status:** UI shell complete at `/marketplace` with mock data. Real fetching is the blocked-by-backend piece.
+
 **Build:**
 
-- `/` page: 2-column grid on mobile, 4-column on desktop.
-- Use SWR to fetch products: `useSWR('/api/products', fetcher)`.
+- `/marketplace` page already exists with the 2-column-mobile / 4-column-desktop grid and an inline `SAMPLE_PRODUCTS` array. Swap that for a SWR fetch: `useSWR('/api/products', fetcher)`.
+- The `/` route now serves the marketing landing page — do not put the browse grid there. The landing page has a featured-products preview (4 cards) that should probably also point at real `/api/products?limit=4` once available.
 - Each product card: image, title, NGN price prominent, sats price secondary, seller name.
 - Empty state: encouraging copy.
 - Loading state: skeleton cards matching the grid layout.
 - Error state: retry button.
 
-**Smoke test:** Load `/` with seed data in the database. Verify 2-column mobile, 4-column desktop, prices in NGN with sats below, no broken images, no horizontal scroll.
+**Smoke test:** Load `/marketplace` with seed data in the database. Verify 2-column mobile, 4-column desktop, prices in NGN with sats below, no broken images, no horizontal scroll. Verify the landing page's "Browse the marketplace" / "See all" links land here.
 
 **Acceptance criteria:**
 
@@ -474,17 +497,19 @@ Build in this order. Pages depend on backend endpoints from Catalog/Commerce; fe
 
 ---
 
-### Feature X6 — Seller signup + login pages [blocked by Catalog C2 + C3]
+### Feature X6 — Auth: /sell, /signin, /signup [blocked by Catalog C2 + C3]
 
 **Prerequisites:** X3 complete. Catalog auth endpoints working.
 
 **Build:**
 
-- `/signup` page: username, password, display name. Submit calls `/api/auth/signup`.
-- `/login` page: username, password. Submit calls `/api/auth/login`.
-- On success → redirect to `/seller`.
+- `/sell` page: seller onboarding entry — pitch + collect username, password, display name, then call `/api/auth/signup` (with a role flag indicating seller). On success, redirect to a seller-profile-completion step or `/seller`. This is the target of every "Open your shop" CTA on the marketing landing page.
+- `/signup` page: buyer signup — username, password. Submit calls `/api/auth/signup`. On success → `/`.
+- `/signin` page: existing user sign-in (NIP-07 or passphrase). Submit calls `/api/auth/signin`. On success → `/seller` if role is SELLER else `/`.
 - On error → show inline error message, never red toast.
 - Use `sessionStore` (Zustand) to track auth state.
+
+**Naming note:** The landing-page CTAs use `/sell` and `/signin` (NOT `/login`). When you scaffold these pages, match those route names. If the Catalog auth endpoints use different verbs (e.g., `POST /api/auth/login`), keep the API verbs as-is and route the UI through them.
 
 **Acceptance criteria:**
 
