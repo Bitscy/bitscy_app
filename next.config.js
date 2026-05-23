@@ -1,11 +1,11 @@
 /** @type {import('next').NextConfig} */
-const withPWA = require('@ducanh2912/next-pwa').default({
-  dest: 'public',
-  register: true,
+// Serwist's default mode is webpack-only (see serwist/serwist#54).
+// Dev runs Turbopack with PWA disabled; production build runs webpack
+// (via the --webpack flag in the build script) to generate sw.js.
+const withSerwist = require('@serwist/next').default({
+  swSrc: 'src/app/sw.ts',
+  swDest: 'public/sw.js',
   disable: process.env.NODE_ENV === 'development',
-  workboxOptions: {
-    skipWaiting: true,
-  },
 });
 
 const nextConfig = {
@@ -35,4 +35,4 @@ const nextConfig = {
   },
 };
 
-module.exports = withPWA(nextConfig);
+module.exports = withSerwist(nextConfig);
