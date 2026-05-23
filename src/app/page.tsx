@@ -7,28 +7,28 @@ const PRODUCTS = [
     title: 'Indigo Dyed Fabric',
     artist: 'Zainab Okafor',
     price: 25000,
-    image: 'https://images.unsplash.com/photo-1578749556568-bc2c40e68b61?w=500&h=500&fit=crop',
+    image: '/artwork-2.jpg',
   },
   {
     id: 2,
     title: 'Brass Geometric Pendant',
     artist: 'Ama Mensah',
     price: 45000,
-    image: 'https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?w=500&h=500&fit=crop',
+    image: '/artwork-6.jpg',
   },
   {
     id: 4,
     title: 'Hand Thrown Vase',
     artist: 'Fatima Hassan',
     price: 85000,
-    image: 'https://images.unsplash.com/photo-1578749556568-bc2c40e68b61?w=500&h=500&fit=crop',
+    image: '/artwork-3.jpg',
   },
   {
     id: 6,
     title: 'Golden Filigree Earrings',
     artist: 'Zainab Okafor',
     price: 35000,
-    image: 'https://images.unsplash.com/photo-1599643478518-a784e5dc4c8f?w=500&h=500&fit=crop',
+    image: '/artwork-4.jpg',
   },
 ]
 
@@ -106,7 +106,7 @@ export default function LandingPage() {
             {/* Hero Image */}
             <div className="relative h-96 sm:h-[500px] lg:h-[600px] rounded-lg overflow-hidden">
               <img
-                src="https://images.unsplash.com/photo-1578749556568-bc2c40e68b61?w=800&h=900&fit=crop"
+                src="/hero-artisan.jpg"
                 alt="African woman artisan at work"
                 className="w-full h-full object-cover"
               />
