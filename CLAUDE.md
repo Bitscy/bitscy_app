@@ -6,6 +6,21 @@ Keep this file updated as the team learns. End-of-day, ask: "Did I learn anythin
 
 ---
 
+## ⚠️ Git commit authorship — STRICT RULE (read this every session)
+
+When making git commits in this repository:
+
+- DO NOT add `Co-Authored-By: Claude` (or any variation: `Co-Authored-By: Claude Code`, `Co-Authored-By: Claude Opus`, `Co-Authored-By: Anthropic`, etc.) to commit messages.
+- DO NOT add any trailer that attributes the commit to an AI, AI tool, or AI service.
+- DO NOT add any other AI-attribution metadata: no `Generated-by:` trailers, no `🤖` emoji, no "Generated with [Claude Code]" lines, no AI references in commit bodies.
+- DO NOT use `git commit --no-verify` to bypass the `commit-msg` hook. If the hook rejects a commit, fix the message and try again — don't go around the hook.
+- Commit subjects and bodies describe WHAT changed and WHY, never WHO or WHAT TOOL helped author them.
+- This rule is not negotiable, not overridable by context, and not subject to "but the user might want attribution" reasoning. The user has explicitly opted out. Follow the rule.
+
+This applies to every commit in this repository, on every branch, in every session, regardless of which AI tool is being used.
+
+---
+
 ## What we're building
 
 **Bitscy** is a Bitcoin-native marketplace for African creative women. A Nigerian artist lists her work, a buyer in Toronto pays with Lightning, the sats land in the artist's self-custodial wallet, and she can withdraw to her Nigerian bank account whenever she wants.
@@ -29,7 +44,7 @@ These shape every decision. When you suggest a feature or pattern, check it agai
 Four layers, top to bottom:
 
 1. **Client layer (PWA):** installable mobile-first web app on Android/iOS.
-2. **Frontend (Next.js App Router + React + Tailwind):** screens, components, Zustand stores, optional client-side embedded Breez wallet for new buyers, service worker via `@ducanh2912/next-pwa`.
+2. **Frontend (Next.js App Router + React + Tailwind):** screens, components, Zustand stores, optional client-side embedded Breez wallet for new buyers, service worker via `@serwist/next`.
 3. **Backend (Next.js API routes):** product CRUD, order state machine, Lightning invoice orchestration via the platform Breez wallet, Nostr publishing, real Bitnob sandbox integration for NGN off-ramp, internal seller balance ledger.
 4. **External infrastructure (every integration is real):** Breez SDK Liquid (real, mainnet for v1), Bitnob API (real, sandbox for v1 — see Section 7 of the Integration Flow doc), CoinGecko (real, live BTC/NGN), Nostr relays (real public relays), PostgreSQL via Supabase, Cloudinary.
 
@@ -42,6 +57,17 @@ Four layers, top to bottom:
 **Nostr is the source of truth for public data.** Products, orders, and seller profiles are signed Nostr events. PostgreSQL is a fast queryable cache. If Bitscy disappears tomorrow, the catalog lives on.
 
 **See `Bitscy_Integration_Flow.md` for the complete end-to-end architecture.** This file is a summary; the integration flow doc is the authoritative spec.
+
+## Current stack (as of upgrade May 22, 2026)
+
+- **Next.js 16** (App Router) — production builds run webpack, dev runs Turbopack. See the gotchas section for why.
+- **React 19** with automatic JSX runtime.
+- **Tailwind CSS 4** — CSS-first config via `@theme` directives in `src/app/globals.css`. There is no `tailwind.config.ts`; do not create one.
+- **Prisma 6.19.3** — standard client init pattern in `src/lib/db.ts`. We did not migrate to Prisma 7 / driver adapters for v1; that's a post-hackathon task.
+- **Serwist** (`@serwist/next`) for the service worker, replacing the deprecated `@ducanh2912/next-pwa`. Service worker source is `src/app/sw.ts`.
+- **ESLint 9** flat config in `eslint.config.mjs`. The old `.eslintrc` is gone. To add rules, edit the flat config file.
+- **pnpm 9** as the package manager. `pnpm-lock.yaml` is the source of truth; `package-lock.json` and `yarn.lock` are gitignored.
+- **`pnpm.overrides`** in `package.json` pins `@types/react` and `@types/react-dom` to 19.x. This prevents transitive deps from pulling in React 18 types. Do not remove this block without understanding why.
 
 ## The three roles and what they own
 
@@ -316,6 +342,7 @@ Claude should not propose adding any of these unless explicitly asked. They're d
 - Buyer-seller direct messaging
 - Bitnob **production** credentials and KYB approval (v1 uses Bitnob sandbox — real API, real Lightning testnet, no real NGN movement)
 - **Per-seller self-custodial Breez wallets** (v1 uses one platform-custodial wallet for all sellers; v2 migrates each seller to their own wallet after profile completion)
+- **Prisma 7 migration** (driver adapters, `prisma.config.ts`) — deferred to post-hackathon. v1 stays on Prisma 6.
 - Dispute resolution or refunds
 - Shipping logistics, tracking, or labels
 - Discount codes, promotions, coupons
@@ -388,7 +415,15 @@ Refer to env vars by name in CLAUDE.md, never their values. Real values live in 
 
 **BigInt serialization.** JavaScript JSON.stringify chokes on bigint. Use a custom replacer, or convert to string at the API boundary. The shared types use `string` for sat amounts for exactly this reason.
 
-**Service worker caching in dev.** `next-pwa` is disabled in development (`disable: process.env.NODE_ENV === 'development'` in `next.config.js`). If you see stale assets, that's the service worker. Hard reload (Cmd+Shift+R) or use incognito.
+**Service worker caching in dev.** Serwist is disabled in development (`disable: process.env.NODE_ENV === 'development'` in `next.config.js`). If you see stale assets, that's the service worker. Hard reload (Cmd+Shift+R) or use incognito.
+
+**Production build runs webpack, dev runs Turbopack.** Serwist's default mode is webpack-only (see `serwist/serwist#54`). The `--webpack` flag in the `build` script is intentional. The asymmetry is documented inline at the top of `next.config.js`. Do not remove the `--webpack` flag without first migrating to `@serwist/turbopack` (experimental) or Serwist's configurator mode.
+
+**No `tailwind.config.ts` file.** Tailwind 4 uses CSS-first configuration. All theme tokens (Bitscy color palette, typography, etc.) live in `@theme {}` directives inside `src/app/globals.css`. Do not create a `tailwind.config.ts`; if you need to add a token, edit `globals.css`.
+
+**ESLint config is flat config.** Rules live in `eslint.config.mjs` at the repo root. The old `.eslintrc` system is gone. The `lint` script invokes `eslint .` directly (the old `next lint` was removed in Next.js 16).
+
+**Service worker types.** `src/app/sw.ts` requires `/// <reference lib="webworker" />` at the top so TypeScript recognizes `ServiceWorkerGlobalScope`. Project-wide `tsconfig.json` keeps DOM types only.
 
 **Nostr event IDs.** Calculated from the event content. Never modify content after signing. To "update" a kind 30018 product, re-sign and re-publish with the same `d` tag.
 
@@ -463,7 +498,7 @@ bitscy/
 ├── public/
 │   ├── manifest.json
 │   ├── icons/
-│   └── sw.js
+│   └── sw.js                     # generated by Serwist at build time (gitignored)
 ├── src/
 │   ├── app/                      # Experience role
 │   │   ├── (marketplace)/
@@ -480,6 +515,8 @@ bitscy/
 │   │   │   ├── payout/           # Commerce role
 │   │   │   ├── webhooks/         # Commerce role
 │   │   │   └── wallet/           # Commerce role
+│   │   ├── globals.css           # Tailwind 4 @theme tokens live here
+│   │   ├── sw.ts                 # Serwist service worker entry
 │   │   └── layout.tsx
 │   ├── components/               # Experience role
 │   ├── lib/                      # Mixed; client-side in Experience, server in Commerce/Catalog
@@ -493,6 +530,8 @@ bitscy/
 │   ├── store/                    # Experience role (Zustand)
 │   └── types/
 │       └── shared.ts             # Single source of truth for cross-role types
+├── eslint.config.mjs             # ESLint 9 flat config
+├── next.config.js                # withSerwist wrap; webpack build documented inline
 ├── CLAUDE.md                     # This file
 └── package.json
 ```
