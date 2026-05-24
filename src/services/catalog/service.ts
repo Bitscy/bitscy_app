@@ -1,6 +1,9 @@
-import type { Product, CreateProductInput, SellerInfo } from '@/types/shared';
+import type { Product, CreateProductInput, UpdateProductInput, SellerInfo } from '@/types/shared';
 import { ApiError } from '@/lib/api-error';
 import { satsToNgn, formatNgn } from '@/lib/currency';
+import { signEventWithSystemKey } from '../nostr/signing';
+import { publishEvent } from '../nostr/client';
+import { buildProductEventTemplate } from '../nostr/events';
 import * as repository from './repository';
 
 /**
@@ -8,14 +11,11 @@ import * as repository from './repository';
  *
  * Owned by the Catalog Engineer.
  *
- * Pattern: API routes call this. This calls repository (DB) and nostr-publisher
+ * Pattern: API routes call this. This calls repository (DB) and Nostr client
  * (side effect). Never call repository directly from an API route.
  */
 
-/**
- * Get seller info by username — the cross-role helper Commerce uses
- * when creating orders.
- */
+// Cross-role helper: Commerce uses this to look up a seller's Lightning Address.
 export async function getSellerByUsername(username: string): Promise<SellerInfo | null> {
   const user = await repository.findUserByUsername(username);
   if (!user || user.role !== 'SELLER') return null;
@@ -44,12 +44,9 @@ export async function getSellerById(id: string): Promise<SellerInfo | null> {
   };
 }
 
-/**
- * Map a Prisma product row to the shared Product type.
- */
-function toProduct(p: Awaited<ReturnType<typeof repository.findProductById>>): Product {
-  if (!p) throw new ApiError('NOT_FOUND', 'Product not found', 404);
+type ProductRow = NonNullable<Awaited<ReturnType<typeof repository.findProductById>>>;
 
+function toProduct(p: ProductRow): Product {
   return {
     id: p.id,
     sellerId: p.sellerId,
@@ -64,7 +61,7 @@ function toProduct(p: Awaited<ReturnType<typeof repository.findProductById>>): P
     images: p.images,
     isDigital: p.isDigital,
     stock: p.stock,
-    status: p.status,
+    status: p.status as Product['status'],
     nostrEventId: p.nostrEventId,
     createdAt: p.createdAt.toISOString(),
   };
@@ -72,9 +69,7 @@ function toProduct(p: Awaited<ReturnType<typeof repository.findProductById>>): P
 
 export async function getProduct(id: string): Promise<Product> {
   const product = await repository.findProductById(id);
-  if (!product) {
-    throw new ApiError('NOT_FOUND', 'Product not found', 404);
-  }
+  if (!product) throw new ApiError('NOT_FOUND', 'Product not found', 404);
   return toProduct(product);
 }
 
@@ -82,6 +77,7 @@ export async function listProducts(params: {
   page?: number;
   pageSize?: number;
   category?: string;
+  sellerId?: string;
 }): Promise<{ items: Product[]; total: number; page: number; pageSize: number }> {
   const page = params.page ?? 1;
   const pageSize = Math.min(params.pageSize ?? 20, 50);
@@ -90,6 +86,7 @@ export async function listProducts(params: {
     page,
     pageSize,
     category: params.category,
+    sellerId: params.sellerId,
   });
 
   return {
@@ -104,10 +101,6 @@ export async function createProductForSeller(
   input: CreateProductInput,
   sellerId: string,
 ): Promise<Product> {
-  // TODO(catalog): publish to Nostr after Postgres create.
-  // Use the pattern: Postgres create → build event → sign → publish to relays → update Postgres with event ID.
-  // See CLAUDE.md in this directory for the canonical implementation pattern.
-
   const product = await repository.createProduct({
     seller: { connect: { id: sellerId } },
     title: input.title,
@@ -121,5 +114,85 @@ export async function createProductForSeller(
     stock: input.stock,
   });
 
-  return toProduct(product);
+  const productData = toProduct(product);
+
+  // Publish to Nostr — best-effort; never fails the product creation.
+  try {
+    const template = buildProductEventTemplate(productData);
+    const signedEvent = signEventWithSystemKey(template);
+    await publishEvent(signedEvent);
+    const updated = await repository.updateProduct(product.id, { nostrEventId: signedEvent.id });
+    return toProduct(updated);
+  } catch (err) {
+    console.error('Nostr publish failed for product', product.id, err);
+    return productData;
+  }
+}
+
+export async function updateProductForSeller(
+  productId: string,
+  sellerId: string,
+  input: UpdateProductInput,
+): Promise<Product> {
+  const existing = await repository.findProductById(productId);
+  if (!existing) throw new ApiError('NOT_FOUND', 'Product not found', 404);
+  if (existing.sellerId !== sellerId) throw new ApiError('FORBIDDEN', 'Not your product', 403);
+
+  const updated = await repository.updateProduct(productId, {
+    ...(input.title !== undefined && { title: input.title }),
+    ...(input.description !== undefined && { description: input.description }),
+    ...(input.priceSats !== undefined && { priceSats: BigInt(input.priceSats) }),
+    ...(input.shippingSats !== undefined && { shippingSats: BigInt(input.shippingSats) }),
+    ...(input.category !== undefined && { category: input.category }),
+    ...(input.images !== undefined && { images: input.images }),
+    ...(input.stock !== undefined && { stock: input.stock }),
+    ...(input.status !== undefined && { status: input.status }),
+  });
+
+  const productData = toProduct(updated);
+
+  // Re-publish to Nostr (replaceable event — same `d` tag replaces the old one).
+  try {
+    const template = buildProductEventTemplate(productData);
+    const signedEvent = signEventWithSystemKey(template);
+    await publishEvent(signedEvent);
+    const withEventId = await repository.updateProduct(productId, { nostrEventId: signedEvent.id });
+    return toProduct(withEventId);
+  } catch (err) {
+    console.error('Nostr re-publish failed for product', productId, err);
+    return productData;
+  }
+}
+
+export async function deleteProductForSeller(productId: string, sellerId: string): Promise<void> {
+  const existing = await repository.findProductById(productId);
+  if (!existing) throw new ApiError('NOT_FOUND', 'Product not found', 404);
+  if (existing.sellerId !== sellerId) throw new ApiError('FORBIDDEN', 'Not your product', 403);
+
+  await repository.unlistProduct(productId);
+}
+
+export async function getStorefront(username: string): Promise<{
+  seller: SellerInfo;
+  products: Product[];
+  total: number;
+  page: number;
+  pageSize: number;
+}> {
+  const seller = await getSellerByUsername(username);
+  if (!seller) throw new ApiError('NOT_FOUND', `No seller found for @${username}`, 404);
+
+  const { items, total } = await repository.listActiveProducts({
+    page: 1,
+    pageSize: 50,
+    sellerId: seller.id,
+  });
+
+  return {
+    seller,
+    products: items.map(toProduct),
+    total,
+    page: 1,
+    pageSize: 50,
+  };
 }
