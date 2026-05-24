@@ -1,22 +1,18 @@
 import type { Order, OrderItem, OrderStatus } from '@/types/shared';
 import { ApiError } from '@/lib/api-error';
-import { satsToNgn, formatNgn } from '@/lib/currency';
+import { formatNgn } from '@/lib/currency';
 import { sendPushNotification, ExpiredSubscriptionError } from '@/lib/push';
 import * as repository from './repository';
 import type { OrderWithRelations } from './repository';
 import * as catalogService from '@/services/catalog/service';
-import * as lightningClient from '@/services/lightning/breez-client';
+import { createPlatformInvoice, sendPlatformPayment } from '@/services/lightning/breez-platform';
+import { trackPendingPayment, findByPaymentHash, deletePendingPayment } from './pending-payments';
+import { recordEntry, getBalance } from './ledger';
+import { getBtcNgnRate, satsToNgnLive } from '@/services/pricing/coingecko';
 import * as payoutService from '@/services/payout/service';
 import { publishEvent } from '@/services/nostr/client';
 import { signEventWithSystemKey } from '@/services/nostr/signing';
 import { NOSTR_KINDS } from '@/types/nostr';
-
-/**
- * Commerce service — public API for the full purchase flow.
- *
- * Owned by the Commerce Engineer. API routes call this. This composes
- * repository (DB), Lightning client, Nostr publishing, and push notifications.
- */
 
 // ============================================================================
 // Mappers
@@ -55,7 +51,7 @@ function mapOrder(order: OrderWithRelations): Order {
 }
 
 // ============================================================================
-// Order creation
+// Order creation (M8)
 // ============================================================================
 
 export interface CreateOrderParams {
@@ -66,11 +62,9 @@ export interface CreateOrderParams {
   encryptedShipping?: string;
 }
 
-export async function createOrder(params: CreateOrderParams): Promise<Order> {
-  // buyerNpub stored in User record; accessed via order relations after creation.
+export async function createOrder(params: CreateOrderParams): Promise<Order & { ngnDisplay: string }> {
   const { productId, quantity, buyerId, encryptedShipping } = params;
 
-  // Use catalog service layer — Commerce does not reach into catalog's repository.
   const product = await catalogService.getProduct(productId);
   if (product.status !== 'ACTIVE') throw new ApiError('OUT_OF_STOCK', 'Product is not available', 409);
   if (product.stock < quantity) throw new ApiError('OUT_OF_STOCK', 'Not enough stock', 409);
@@ -89,23 +83,24 @@ export async function createOrder(params: CreateOrderParams): Promise<Order> {
     shippingSats: shippingSatsBig,
     encryptedShipping: encryptedShipping ?? null,
     items: {
-      create: [
-        {
-          product: { connect: { id: productId } },
-          quantity,
-          priceSats: priceSatsBig,
-        },
-      ],
+      create: [{ product: { connect: { id: productId } }, quantity, priceSats: priceSatsBig }],
     },
   });
 
-  // Generate Lightning invoice. Errors leave the order in DB as PENDING;
-  // a cleanup job can cancel expired invoices without affecting the order ID.
-  const invoice = await lightningClient.createInvoice({
+  // Generate invoice on the platform wallet (not a per-seller wallet).
+  const invoice = await createPlatformInvoice(
+    totalSats,
+    `Bitscy order #${order.id} — ${product.title}`,
+  );
+
+  // Track which seller this payment belongs to so we can credit them on settlement.
+  await trackPendingPayment({
+    paymentHash: invoice.paymentHash,
     sellerId: product.sellerId,
-    sellerLightningAddress: seller.lightningAddress,
     amountSats: totalSats,
-    description: `Bitscy order #${order.id} — ${product.title}`,
+    orderId: order.id,
+    description: `Order #${order.id} — ${product.title}`,
+    expiresAt: invoice.expiresAt,
   });
 
   await repository.updateOrderInvoice(order.id, invoice.bolt11, invoice.paymentHash);
@@ -113,25 +108,48 @@ export async function createOrder(params: CreateOrderParams): Promise<Order> {
   const updatedOrder = await repository.findOrderById(order.id);
   if (!updatedOrder) throw new ApiError('INTERNAL_ERROR', 'Order creation failed', 500);
 
-  return mapOrder(updatedOrder);
+  const ngnAmount = await satsToNgnLive(totalSats);
+  const ngnDisplay = formatNgn(ngnAmount);
+
+  return { ...mapOrder(updatedOrder), ngnDisplay };
 }
 
 // ============================================================================
-// Payment settlement
+// Payment settlement (M7 + M9)
 // ============================================================================
 
 /**
- * Mark an order paid. Called by both the Breez webhook and the polling endpoint.
- * The atomic WHERE clause means only one caller wins; the other is a no-op.
+ * Handle an incoming payment — called by both the Breez event listener and
+ * the frontend polling endpoint. Idempotent: the atomic WHERE status='PENDING'
+ * update ensures only the first caller triggers side effects.
  */
 export async function markPaid(paymentHash: string): Promise<Order> {
   const { order, wasAlreadyPaid } = await repository.markOrderPaid(paymentHash);
 
   if (!wasAlreadyPaid) {
-    // We won the race — publish Nostr event, notify seller, decrement stock.
+    // We won the race — run all side effects exactly once.
+    const pending = await findByPaymentHash(paymentHash);
+
+    if (pending) {
+      // Record the SALE in the seller's ledger at the current live BTC/NGN rate.
+      const { ratePerBtc } = await getBtcNgnRate();
+      await recordEntry({
+        userId: pending.sellerId,
+        amountSats: pending.amountSats,
+        type: 'SALE',
+        refId: order.id,
+        description: `Sale — order #${order.id}`,
+        recordedNgnRate: ratePerBtc,
+      });
+
+      // Clean up the short-lived pending record.
+      await deletePendingPayment(paymentHash);
+    }
+
     for (const item of order.items) {
       await repository.decrementProductStock(item.productId, item.quantity);
     }
+
     await publishOrderNostrEvent(order);
     await notifySeller(order);
   }
@@ -143,9 +161,8 @@ async function publishOrderNostrEvent(order: OrderWithRelations): Promise<void> 
   try {
     const content = JSON.stringify({
       orderId: order.id,
-      items: order.items.map((i: OrderWithRelations['items'][number]) => ({
+      items: order.items.map((i) => ({
         productId: i.productId,
-        productEventId: null,
         quantity: i.quantity,
         priceSats: i.priceSats.toString(),
       })),
@@ -168,7 +185,7 @@ async function publishOrderNostrEvent(order: OrderWithRelations): Promise<void> 
     await publishEvent(signed);
     await repository.updateOrderNostrEventId(order.id, signed.id);
   } catch (err) {
-    // Nostr publish failure is non-fatal — log and continue.
+    // Nostr publish failure is non-fatal.
     console.error('Failed to publish order Nostr event:', err);
   }
 }
@@ -179,11 +196,12 @@ async function notifySeller(order: OrderWithRelations): Promise<void> {
 
   const firstItem = order.items[0];
   const productTitle = firstItem?.product.title ?? 'your item';
-  const amountNgn = formatNgn(satsToNgn(order.totalSats));
+  const ngnAmount = await satsToNgnLive(order.totalSats);
+  const amountDisplay = formatNgn(ngnAmount);
 
   const payload = {
     title: 'Sale on Bitscy!',
-    body: `You just sold "${productTitle}" for ${amountNgn}`,
+    body: `You just sold "${productTitle}" for ${amountDisplay}`,
     icon: '/icons/icon-192.png',
     url: `/seller/orders/${order.id}`,
   };
@@ -230,17 +248,20 @@ export async function checkInvoiceStatus(
   paymentHash: string,
   requestingUserId: string,
 ): Promise<{ settled: boolean; order: Order | null }> {
-  const status = await lightningClient.verifyInvoice(paymentHash);
+  // Check if already settled in DB (fast path — no Lightning call needed).
+  const raw = await repository.findOrderByPaymentHash(paymentHash);
 
-  if (status.settled) {
-    const order = await markPaid(paymentHash);
-    // Verify the requester is the buyer for this order
-    const raw = await repository.findOrderByPaymentHash(paymentHash);
-    if (raw && raw.buyerId !== requestingUserId && raw.sellerId !== requestingUserId) {
-      throw new ApiError('FORBIDDEN', 'Access denied', 403);
-    }
-    return { settled: true, order };
+  if (raw && raw.buyerId !== requestingUserId && raw.sellerId !== requestingUserId) {
+    throw new ApiError('FORBIDDEN', 'Access denied', 403);
   }
+
+  if (raw?.status === 'PAID' || raw?.status === 'SHIPPED' || raw?.status === 'DELIVERED') {
+    return { settled: true, order: mapOrder(raw) };
+  }
+
+  // Not yet settled in DB — check pending payments table.
+  const pending = await findByPaymentHash(paymentHash);
+  if (!pending) return { settled: false, order: null };
 
   return { settled: false, order: null };
 }
@@ -265,19 +286,30 @@ export async function markShipped(
 }
 
 // ============================================================================
-// Wallet balance
+// Wallet balance — ledger-based (M5), not per-seller Breez wallet
 // ============================================================================
 
-export async function getSellerBalance(sellerId: string): Promise<{ balanceSats: string; balanceNgn: string }> {
-  const balanceSats = await lightningClient.getWalletBalance(sellerId);
+export async function getSellerBalance(sellerId: string): Promise<{
+  balanceSats: string;
+  balanceNgn: string;
+  rateStale: boolean;
+}> {
+  const [balanceSats, { ratePerBtc, stale }] = await Promise.all([
+    getBalance(sellerId),
+    getBtcNgnRate(),
+  ]);
+
+  const ngnAmount = (balanceSats * ratePerBtc) / 100_000_000n;
+
   return {
     balanceSats: balanceSats.toString(),
-    balanceNgn: formatNgn(satsToNgn(balanceSats)),
+    balanceNgn: formatNgn(ngnAmount),
+    rateStale: stale,
   };
 }
 
 // ============================================================================
-// Payouts
+// Payouts / withdrawals (M12)
 // ============================================================================
 
 export async function initiatePayout(
@@ -290,18 +322,43 @@ export async function initiatePayout(
     throw new ApiError('NOT_FOUND', 'Bank account not found', 404);
   }
 
+  const balance = await getBalance(sellerId);
+  if (amountSats > balance) {
+    throw new ApiError('VALIDATION_ERROR', 'Insufficient balance', 400);
+  }
+
+  // Step 1: Ask Bitnob to initiate the payout — this gives us a payout record.
   const result = await payoutService.initiatePayoutRequest(amountSats, bankAccountId, {
     accountName: account.accountName,
     accountNumber: account.accountNumber,
     bankName: account.bankName,
   });
 
-  // Persist the payout record for history and status polling
+  // Step 2: If Bitnob returns a Lightning invoice for us to pay, pay it now.
+  // In mock mode (or if no invoice), skip platform wallet payment.
+  if (result.lightningInvoice) {
+    await sendPlatformPayment(result.lightningInvoice);
+  }
+
+  // Step 3: ONLY after payment confirmed — debit the seller's ledger.
+  const { ratePerBtc } = await getBtcNgnRate();
+  await recordEntry({
+    userId: sellerId,
+    amountSats: -amountSats,
+    type: 'WITHDRAWAL',
+    refId: result.payoutId,
+    description: `Withdrawal to ${account.bankName} ****${account.accountNumber.slice(-4)}`,
+    recordedNgnRate: ratePerBtc,
+  });
+
+  // Persist payout record for history and webhook updates.
+  const { ratePerBtc: ngnRate } = await getBtcNgnRate();
+  const amountNgn = (amountSats * ngnRate) / 100_000_000n;
   await repository.createPayout({
     user: { connect: { id: sellerId } },
     bankAccountId,
     amountSats,
-    amountNgn: satsToNgn(amountSats),
+    amountNgn,
     status: 'PENDING',
     externalId: result.payoutId,
   });

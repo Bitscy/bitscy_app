@@ -1,15 +1,19 @@
 /**
  * /api/lnurlp/[username]/callback
  *
- * LNURL-pay step 2: wallet POSTs amount in millisats, server returns a BOLT-11 invoice.
- * This is what external Lightning wallets call after the first metadata fetch.
+ * LNURL-pay step 2: wallet GETs this with ?amount=<msats>, server returns a BOLT-11 invoice.
+ * Called by external Lightning wallets after the metadata fetch from step 1.
+ *
+ * Uses the platform Breez wallet (not a per-seller wallet) and records a
+ * PendingPayment so the settlement event knows which seller to credit.
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
 
 import { handleApiError, ApiError } from '@/lib/api-error';
 import * as catalogService from '@/services/catalog/service';
-import * as lightningClient from '@/services/lightning/breez-client';
+import { createPlatformInvoice } from '@/services/lightning/breez-platform';
+import { trackPendingPayment } from '@/services/commerce/pending-payments';
 
 export async function GET(
   request: NextRequest,
@@ -17,21 +21,26 @@ export async function GET(
 ) {
   try {
     const { username } = await params;
-    const amountMsat = request.nextUrl.searchParams.get('amount');
-    if (!amountMsat) throw new ApiError('VALIDATION_ERROR', 'amount parameter required', 400);
+    const amountMsatParam = request.nextUrl.searchParams.get('amount');
+    if (!amountMsatParam) throw new ApiError('VALIDATION_ERROR', 'amount parameter required', 400);
 
-    const amountMsatBig = BigInt(amountMsat);
-    const amountSats = amountMsatBig / 1000n;
+    const amountSats = BigInt(amountMsatParam) / 1000n;
+    if (amountSats < 1n) throw new ApiError('VALIDATION_ERROR', 'amount too small', 400);
 
     const seller = await catalogService.getSellerByUsername(username);
     if (!seller) throw new ApiError('NOT_FOUND', `No seller: ${username}`, 404);
 
-    const lightningAddress = seller.lightningAddress;
-    const invoice = await lightningClient.createInvoice({
+    const description = `Pay ${seller.displayName ?? seller.username} on Bitscy`;
+    const invoice = await createPlatformInvoice(amountSats, description);
+
+    // Track so the settlement event handler knows which seller to credit.
+    // orderId is null — this is a direct LNURL pay, not an internal marketplace order.
+    await trackPendingPayment({
+      paymentHash: invoice.paymentHash,
       sellerId: seller.id,
-      sellerLightningAddress: lightningAddress,
       amountSats,
-      description: `Payment to ${seller.displayName ?? seller.username} on Bitscy`,
+      description,
+      expiresAt: invoice.expiresAt,
     });
 
     return NextResponse.json({ pr: invoice.bolt11, routes: [] });

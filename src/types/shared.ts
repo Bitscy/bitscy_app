@@ -180,6 +180,7 @@ export interface PayoutResult {
   amountSats: string;
   amountNgn: string; // computed from live CoinGecko rate at time of withdrawal
   etaSeconds: number;
+  lightningInvoice?: string; // BOLT-11 for platform wallet to pay (Bitnob withdrawal flow)
 }
 
 export interface Payout {

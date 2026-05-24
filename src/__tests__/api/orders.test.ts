@@ -26,6 +26,7 @@ const mockOrderResponse = {
   createdAt: new Date().toISOString(),
   paidAt: null,
   shippedAt: null,
+  ngnDisplay: '₦1,500',
 };
 
 // ── POST /api/orders ─────────────────────────────────────────────────────────

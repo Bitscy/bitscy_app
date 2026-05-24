@@ -1,34 +1,38 @@
-import type { PayoutResult } from '@/types/shared';
-import { initiatePayout, getPayoutStatus } from './bitnob-mock';
-import type { BitnobBankAccountDetails } from './bitnob-real';
+import type { PayoutResult, BankAccount } from '@/types/shared';
+import { initiatePayout as mockInitiatePayout, getPayoutStatus as mockGetStatus } from './bitnob-mock';
 
-export type { BitnobBankAccountDetails };
-
-/**
- * Payout service. Public API for naira off-ramp operations.
- *
- * Routes calls to the mock for v1, real Bitnob for v2.
- * Service consumers don't know which is which.
- */
 
 const USE_REAL_BITNOB = process.env.USE_REAL_BITNOB === 'true';
+
+export interface BankAccountDetails {
+  accountName: string;
+  accountNumber: string;
+  bankName: string;
+}
 
 export async function initiatePayoutRequest(
   amountSats: bigint,
   bankAccountId: string,
-  bankAccount: BitnobBankAccountDetails,
+  bankAccount: BankAccountDetails,
 ): Promise<PayoutResult> {
   if (USE_REAL_BITNOB) {
-    const real = await import('./bitnob-real');
-    return real.initiatePayout(amountSats, bankAccountId, bankAccount);
+    const client = await import('./bitnob-client');
+    const fullAccount: BankAccount = {
+      id: bankAccountId,
+      bankName: bankAccount.bankName,
+      accountNumber: bankAccount.accountNumber,
+      accountName: bankAccount.accountName,
+      isDefault: false,
+    };
+    return client.initiatePayout(amountSats, fullAccount);
   }
-  return initiatePayout(amountSats, bankAccountId);
+  return mockInitiatePayout(amountSats, bankAccountId);
 }
 
 export async function getPayoutStatusById(payoutId: string): Promise<PayoutResult | null> {
   if (USE_REAL_BITNOB) {
-    const real = await import('./bitnob-real');
-    return real.getPayoutStatus(payoutId);
+    const client = await import('./bitnob-client');
+    return client.getStatus(payoutId);
   }
-  return getPayoutStatus(payoutId);
+  return mockGetStatus(payoutId);
 }

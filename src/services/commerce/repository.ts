@@ -199,6 +199,12 @@ export async function findPayoutById(id: string) {
   });
 }
 
+export async function findPayoutByExternalId(externalId: string) {
+  return prisma.payout.findFirst({
+    where: { externalId },
+  });
+}
+
 export async function updatePayoutStatus(
   id: string,
   status: 'PENDING' | 'SUCCESS' | 'FAILED',

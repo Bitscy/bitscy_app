@@ -16,6 +16,7 @@ describe('GET /api/wallet/balance', () => {
     vi.mocked(commerceService.getSellerBalance).mockResolvedValue({
       balanceSats: '250000',
       balanceNgn: '₦362,500',
+      rateStale: false,
     });
 
     const { GET } = await import('@/app/api/wallet/balance/route');
