@@ -173,9 +173,12 @@ export default function SellerPage() {
 
               {/* Shop URL Pill */}
               <div className="inline-flex items-center gap-3 bg-card border border-border px-4 py-2 rounded-full">
-                <span className="font-sans text-xs sm:text-sm text-foreground tabular-nums">
+                <Link
+                  href="/shop/adaeze"
+                  className="font-sans text-xs sm:text-sm text-foreground tabular-nums hover:text-accent transition-colors"
+                >
                   {SELLER.shopUrl}
-                </span>
+                </Link>
                 <button
                   onClick={handleCopyShopUrl}
                   className="text-xs sm:text-sm text-accent hover:opacity-80 transition-opacity font-sans font-medium"
