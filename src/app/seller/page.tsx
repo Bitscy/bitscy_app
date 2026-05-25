@@ -255,71 +255,73 @@ export default function SellerPage() {
                     const config = STATUS_CONFIG[status]!
 
                     return (
-                      <div key={order.id} className="bg-card border border-border rounded-lg p-4 space-y-3">
-                        {/* Status Pill */}
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs text-muted font-sans tabular-nums">
-                            {order.id}
-                          </p>
-                          <div className={`${config.bg} ${config.text} text-xs px-3 py-1 rounded-full font-sans font-medium`}>
-                            {config.label}
+                      <div key={order.id} className="bg-card border border-border rounded-lg overflow-hidden">
+                        <Link
+                          href={`/seller/orders/${order.id}`}
+                          className="block p-4 space-y-3 hover:bg-input/30 transition-colors"
+                        >
+                          {/* Status Pill */}
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs text-muted font-sans tabular-nums">
+                              {order.id}
+                            </p>
+                            <div className={`${config.bg} ${config.text} text-xs px-3 py-1 rounded-full font-sans font-medium`}>
+                              {config.label}
+                            </div>
                           </div>
-                        </div>
 
-                        {/* Order Info */}
-                        <div>
-                          <p className="font-serif text-sm font-normal text-foreground">
-                            {order.product}
-                          </p>
-                          <p className="font-sans text-xs text-accent">
-                            Sold to {order.buyer}
-                          </p>
-                          <p className="font-sans text-sm text-foreground tabular-nums">
-                            ₦{order.total.toLocaleString('en-NG')}
-                          </p>
-                        </div>
+                          {/* Order Info */}
+                          <div>
+                            <p className="font-serif text-sm font-normal text-foreground">
+                              {order.product}
+                            </p>
+                            <p className="font-sans text-xs text-accent">
+                              Sold to {order.buyer}
+                            </p>
+                            <p className="font-sans text-sm text-foreground tabular-nums">
+                              ₦{order.total.toLocaleString('en-NG')}
+                            </p>
+                          </div>
 
-                        {/* Date Info */}
-                        <p className="font-sans text-xs text-muted">
-                          {order.paidRelative}
-                        </p>
+                          {/* Date Info */}
+                          <p className="font-sans text-xs text-muted">
+                            {order.paidRelative}
+                          </p>
+                        </Link>
 
                         {/* Mark as Shipped - Only for PAID orders */}
                         {status === 'PAID' && !shippingConfirm?.includes(order.id) && (
-                          <>
-                            <div className="border-t border-border pt-3" />
+                          <div className="border-t border-border px-4 py-3">
                             <button
                               onClick={() => setShippingConfirm(order.id)}
                               className="w-full bg-primary text-primary-foreground py-2 px-3 rounded font-sans text-sm font-medium hover:opacity-90 transition-opacity"
                             >
                               Mark as shipped
                             </button>
-                          </>
+                          </div>
                         )}
 
                         {/* Confirmation State */}
                         {shippingConfirm === order.id && (
-                          <>
-                            <div className="border-t border-border pt-3 bg-[#F5EFE3] -mx-4 -mb-4 px-4 py-3 rounded-b-lg">
-                              <p className="font-sans text-sm text-foreground mb-3">
-                                Mark this order as shipped to {order.buyer}? They&apos;ll see the status update.
-                              </p>
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => handleMarkAsShipped(order.id)}
-                                  className="flex-1 bg-primary text-primary-foreground py-2 px-3 rounded font-sans text-sm font-medium hover:opacity-90 transition-opacity"
-                                >
-                                  Confirm
-                                </button>
-                                <button
-                                  onClick={() => setShippingConfirm(null)}
-                                  className="flex-1 bg-transparent text-foreground py-2 px-3 rounded font-sans text-sm font-medium hover:bg-border transition-colors"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
+                          <div className="border-t border-border bg-[#F5EFE3] px-4 py-3">
+                            <p className="font-sans text-sm text-foreground mb-3">
+                              Mark this order as shipped to {order.buyer}? They&apos;ll see the status update.
+                            </p>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleMarkAsShipped(order.id)}
+                                className="flex-1 bg-primary text-primary-foreground py-2 px-3 rounded font-sans text-sm font-medium hover:opacity-90 transition-opacity"
+                              >
+                                Confirm
+                              </button>
+                              <button
+                                onClick={() => setShippingConfirm(null)}
+                                className="flex-1 bg-transparent text-foreground py-2 px-3 rounded font-sans text-sm font-medium hover:bg-border transition-colors"
+                              >
+                                Cancel
+                              </button>
                             </div>
-                          </>
+                          </div>
                         )}
                       </div>
                     )
