@@ -109,6 +109,9 @@ function SellerPageContent() {
   // 0 sales, 0 products, 0 orders). Real implementation derives this
   // from session-state checks against actual data.
   const isEmpty = searchParams.get('empty') === '1'
+  // ?loading=1 demonstrates the loading state. Real implementation
+  // gates this on SWR / fetch isLoading flags.
+  const isLoading = searchParams.get('loading') === '1'
 
   const [copiedText, setCopiedText] = useState<string | null>(null)
   const [shippingConfirm, setShippingConfirm] = useState<string | null>(null)
@@ -245,62 +248,102 @@ function SellerPageContent() {
               <div className="lg:col-span-2 space-y-6">
                 {/* BALANCE CARD */}
                 <div className="bg-card border border-border rounded-lg p-6">
-                  <p className="font-sans text-xs uppercase tracking-widest text-muted mb-3">
-                    Available balance
-                  </p>
-                  <div className="mb-1">
-                    <p className={`font-serif text-5xl sm:text-6xl font-normal tabular-nums ${
-                      balance === 0 ? 'text-muted' : 'text-foreground'
-                    }`}>
-                      ₦{balance.toLocaleString('en-NG')}
-                    </p>
-                  </div>
-                  <p className="font-sans text-sm text-muted mb-1 tabular-nums">
-                    ≈ {balanceSats.toLocaleString('en-NG')} sats
-                  </p>
-                  <p className="font-sans text-xs text-muted mb-6">
-                    Updated just now
-                  </p>
-                  {balance === 0 ? (
-                    <button
-                      type="button"
-                      disabled
-                      className="block w-full text-center bg-primary text-primary-foreground py-3 px-4 rounded font-sans font-medium opacity-50 cursor-not-allowed"
-                    >
-                      Withdraw to bank
-                    </button>
+                  {isLoading ? (
+                    <div aria-busy="true" aria-label="Loading balance">
+                      <div className="h-3 w-32 bg-input rounded mb-4 animate-pulse" />
+                      <div className="h-14 w-56 bg-input rounded mb-2 animate-pulse" />
+                      <div className="h-3 w-32 bg-input rounded mb-1 animate-pulse" />
+                      <div className="h-3 w-24 bg-input rounded mb-6 animate-pulse" />
+                      <div className="h-12 bg-input rounded animate-pulse" />
+                    </div>
                   ) : (
-                    <Link
-                      href="/seller/withdraw"
-                      className="block w-full text-center bg-primary text-primary-foreground py-3 px-4 rounded font-sans font-medium hover:opacity-90 transition-opacity"
-                    >
-                      Withdraw to bank
-                    </Link>
+                    <>
+                      <p className="font-sans text-xs uppercase tracking-widest text-muted mb-3">
+                        Available balance
+                      </p>
+                      <div className="mb-1">
+                        <p className={`font-serif text-5xl sm:text-6xl font-normal tabular-nums ${
+                          balance === 0 ? 'text-muted' : 'text-foreground'
+                        }`}>
+                          ₦{balance.toLocaleString('en-NG')}
+                        </p>
+                      </div>
+                      <p className="font-sans text-sm text-muted mb-1 tabular-nums">
+                        ≈ {balanceSats.toLocaleString('en-NG')} sats
+                      </p>
+                      <p className="font-sans text-xs text-muted mb-2">
+                        Updated just now ·{' '}
+                        <Link
+                          href="/seller/withdraw/history"
+                          className="text-accent hover:opacity-80 transition-opacity"
+                        >
+                          View activity
+                        </Link>
+                      </p>
+                      <p className="font-sans text-xs text-muted mb-6">
+                        Held by Bitscy.{' '}
+                        <Link
+                          href="/seller/settings"
+                          className="text-accent hover:opacity-80 transition-opacity"
+                        >
+                          Learn more →
+                        </Link>
+                      </p>
+                      {balance === 0 ? (
+                        <button
+                          type="button"
+                          disabled
+                          className="block w-full text-center bg-primary text-primary-foreground py-3 px-4 rounded font-sans font-medium opacity-50 cursor-not-allowed"
+                        >
+                          Withdraw to bank
+                        </button>
+                      ) : (
+                        <Link
+                          href="/seller/withdraw"
+                          className="block w-full text-center bg-primary text-primary-foreground py-3 px-4 rounded font-sans font-medium hover:opacity-90 transition-opacity"
+                        >
+                          Withdraw to bank
+                        </Link>
+                      )}
+                    </>
                   )}
                 </div>
 
                 {/* STATS ROW */}
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-card border border-border rounded-lg p-4">
-                    <p className="font-sans text-xs uppercase tracking-widest text-muted mb-3">
-                      Total sales
-                    </p>
-                    <p className={`font-serif text-4xl sm:text-5xl font-normal ${
-                      totalSales === 0 ? 'text-muted' : 'text-foreground'
-                    }`}>
-                      {totalSales}
-                    </p>
-                  </div>
-                  <div className="bg-card border border-border rounded-lg p-4">
-                    <p className="font-sans text-xs uppercase tracking-widest text-muted mb-3">
-                      Total earned
-                    </p>
-                    <p className={`font-serif text-2xl sm:text-3xl font-normal tabular-nums ${
-                      totalEarned === 0 ? 'text-muted' : 'text-foreground'
-                    }`}>
-                      ₦{(totalEarned / 1000).toFixed(0)}k
-                    </p>
-                  </div>
+                  {isLoading ? (
+                    <>
+                      {[0, 1].map(i => (
+                        <div key={i} className="bg-card border border-border rounded-lg p-4" aria-busy="true">
+                          <div className="h-3 w-20 bg-input rounded mb-4 animate-pulse" />
+                          <div className="h-10 w-24 bg-input rounded animate-pulse" />
+                        </div>
+                      ))}
+                    </>
+                  ) : (
+                    <>
+                      <div className="bg-card border border-border rounded-lg p-4">
+                        <p className="font-sans text-xs uppercase tracking-widest text-muted mb-3">
+                          Total sales
+                        </p>
+                        <p className={`font-serif text-4xl sm:text-5xl font-normal ${
+                          totalSales === 0 ? 'text-muted' : 'text-foreground'
+                        }`}>
+                          {totalSales}
+                        </p>
+                      </div>
+                      <div className="bg-card border border-border rounded-lg p-4">
+                        <p className="font-sans text-xs uppercase tracking-widest text-muted mb-3">
+                          Total earned
+                        </p>
+                        <p className={`font-serif text-2xl sm:text-3xl font-normal tabular-nums ${
+                          totalEarned === 0 ? 'text-muted' : 'text-foreground'
+                        }`}>
+                          ₦{(totalEarned / 1000).toFixed(0)}k
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -317,7 +360,23 @@ function SellerPageContent() {
                 </div>
 
                 <div className="space-y-3">
-                  {orders.length === 0 && (
+                  {isLoading &&
+                    [0, 1, 2].map(i => (
+                      <div
+                        key={i}
+                        className="bg-card border border-border rounded-lg p-4 space-y-3"
+                        aria-busy="true"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="h-3 w-24 bg-input rounded animate-pulse" />
+                          <div className="h-5 w-28 bg-input rounded-full animate-pulse" />
+                        </div>
+                        <div className="h-4 w-3/4 bg-input rounded animate-pulse" />
+                        <div className="h-3 w-1/2 bg-input rounded animate-pulse" />
+                        <div className="h-4 w-1/3 bg-input rounded animate-pulse" />
+                      </div>
+                    ))}
+                  {!isLoading && orders.length === 0 && (
                     <div className="bg-card border border-border rounded-lg p-6 text-center">
                       <div
                         className="w-12 h-12 rounded-full border-2 mx-auto mb-4"
@@ -337,7 +396,7 @@ function SellerPageContent() {
                       </button>
                     </div>
                   )}
-                  {orders.map(order => {
+                  {!isLoading && orders.map(order => {
                     const status = orderStatuses[order.id]!
                     const config = STATUS_CONFIG[status]!
 
@@ -430,7 +489,17 @@ function SellerPageContent() {
                 </Link>
               </div>
 
-              {products.length === 0 ? (
+              {isLoading ? (
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                  {[0, 1, 2, 3].map(i => (
+                    <div key={i} aria-busy="true">
+                      <div className="aspect-square rounded-lg mb-2 bg-input animate-pulse" />
+                      <div className="h-3 w-3/4 bg-input rounded mb-1 animate-pulse" />
+                      <div className="h-3 w-1/2 bg-input rounded animate-pulse" />
+                    </div>
+                  ))}
+                </div>
+              ) : products.length === 0 ? (
                 <div className="bg-white border border-dashed border-border rounded-lg p-8 text-center mb-6">
                   <p className="font-serif text-2xl font-normal mb-2">Add your first piece.</p>
                   <p className="font-sans text-sm text-muted mb-5 max-w-sm mx-auto">
