@@ -109,6 +109,10 @@ export default function SellerPage() {
   const [orderStatuses, setOrderStatuses] = useState<Record<string, string>>(
     ORDERS.reduce((acc, order) => ({ ...acc, [order.id]: order.status }), {})
   )
+  // Mock: assume the seller hasn't finished their profile yet so the
+  // "Complete your shop" banner renders. Production ties this to session
+  // state (avatar + about + location all set).
+  const [profileBannerVisible, setProfileBannerVisible] = useState(true)
 
   const handleCopyShopUrl = () => {
     navigator.clipboard.writeText(SELLER.shopUrl)
@@ -187,6 +191,33 @@ export default function SellerPage() {
                 </button>
               </div>
             </div>
+
+            {/* COMPLETE-YOUR-SHOP BANNER (shown when profile is incomplete) */}
+            {profileBannerVisible && (
+              <div className="bg-[#F5EFE3] border border-border rounded-lg p-4 sm:p-5 mb-6 flex items-start gap-4">
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-serif text-lg sm:text-xl font-normal text-foreground mb-1">
+                    Complete your shop.
+                  </h3>
+                  <p className="font-sans text-sm text-muted mb-3 sm:max-w-md">
+                    Add a photo and a sentence about your work so buyers know who you are.
+                  </p>
+                  <Link
+                    href="/seller/profile?incomplete=1"
+                    className="inline-block font-sans text-sm text-accent font-medium hover:opacity-80 transition-opacity"
+                  >
+                    Complete your shop →
+                  </Link>
+                </div>
+                <button
+                  onClick={() => setProfileBannerVisible(false)}
+                  className="text-muted hover:text-foreground transition-colors p-1 -m-1 shrink-0"
+                  aria-label="Dismiss"
+                >
+                  <span className="text-xs font-sans">Dismiss</span>
+                </button>
+              </div>
+            )}
 
             {/* TWO COLUMN LAYOUT - Mobile stacked, Desktop side-by-side */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8 mb-12">
