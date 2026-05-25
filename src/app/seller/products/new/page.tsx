@@ -115,7 +115,7 @@ export default function NewProductPage() {
 
     setIsSubmitting(true)
     await new Promise(resolve => setTimeout(resolve, 1500))
-    router.push('/products/indigo-fabric')
+    router.push('/products/indigo-fabric?justPublished=1')
   }
 
   return (

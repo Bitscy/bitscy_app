@@ -1,9 +1,9 @@
 'use client'
 
-import { use, useState, useRef, useEffect } from 'react'
+import { Suspense, use, useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { ChevronLeft, ChevronRight, Flame } from 'lucide-react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Check, ChevronLeft, ChevronRight, Copy, Flame, X } from 'lucide-react'
 
 interface MockProduct {
   id: string
@@ -48,8 +48,9 @@ Measures 90cm × 120cm. Use as a wall hanging, table runner, or garment. Care: h
   },
 }
 
-export default function ProductPage({ params }: { params: Promise<{ id: string }> }) {
+function ProductPageContent({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { id } = use(params)
   const product = PRODUCTS[id] ?? PRODUCTS['indigo-fabric']!
 
@@ -57,6 +58,23 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
   const [isSticky, setIsSticky] = useState(false)
   const [buyButtonRef, setBuyButtonRef] = useState<HTMLDivElement | null>(null)
   const touchStartX = useRef(0)
+
+  // ?justPublished=1 is set by /seller/products/new after a successful
+  // publish. Show a one-shot "Your product is live." banner with share
+  // URL + Copy + dashboard / list-another CTAs. Dismissible per-session.
+  const justPublished = searchParams.get('justPublished') === '1'
+  const [bannerVisible, setBannerVisible] = useState(justPublished)
+  const [urlCopied, setUrlCopied] = useState(false)
+
+  const shareUrl = typeof window !== 'undefined'
+    ? `${window.location.origin}/products/${product.id}`
+    : `bitscy.com/products/${product.id}`
+
+  const handleCopyShareUrl = () => {
+    navigator.clipboard.writeText(shareUrl)
+    setUrlCopied(true)
+    setTimeout(() => setUrlCopied(false), 2000)
+  }
 
   // Handle sticky buy bar on scroll
   useEffect(() => {
@@ -112,6 +130,66 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
           </button>
         </div>
       </div>
+
+      {/* "Your product is live" banner — shown once after publish */}
+      {bannerVisible && (
+        <div className="bg-[#F5EFE3] border-b border-border">
+          <div className="mx-auto max-w-7xl px-5 sm:px-6 lg:px-8 py-4 flex items-start gap-4">
+            <div className="flex-1 min-w-0">
+              <h2 className="font-serif text-xl sm:text-2xl font-normal text-foreground mb-1">
+                Your product is live.
+              </h2>
+              <p className="font-sans text-sm text-muted mb-3">
+                Share the link to bring buyers to this piece.
+              </p>
+              <div className="flex flex-wrap items-center gap-3 mb-4">
+                <div className="inline-flex items-center gap-3 bg-white border border-border px-3 py-1.5 rounded-full">
+                  <span className="font-sans text-xs sm:text-sm text-foreground tabular-nums truncate max-w-[200px] sm:max-w-none">
+                    {shareUrl}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyShareUrl}
+                    className="text-accent hover:opacity-80 transition-opacity font-sans text-xs sm:text-sm font-medium flex items-center gap-1"
+                  >
+                    {urlCopied ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" /> Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" /> Copy
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <Link
+                  href="/seller/products/new"
+                  className="inline-flex items-center justify-center bg-primary text-primary-foreground px-4 py-2 rounded font-sans text-sm font-medium hover:opacity-90 transition-opacity"
+                >
+                  List another piece
+                </Link>
+                <Link
+                  href="/seller"
+                  className="inline-flex items-center justify-center font-sans text-sm text-foreground hover:text-accent transition-colors px-2 py-2"
+                >
+                  Back to dashboard
+                </Link>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setBannerVisible(false)}
+              className="text-muted hover:text-foreground transition-colors p-1 -m-1 shrink-0"
+              aria-label="Dismiss"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="lg:flex lg:gap-12 lg:max-w-7xl lg:mx-auto lg:px-10">
         {/* IMAGE CAROUSEL SECTION */}
@@ -304,5 +382,13 @@ export default function ProductPage({ params }: { params: Promise<{ id: string }
         </div>
       )}
     </div>
+  )
+}
+
+export default function ProductPage({ params }: { params: Promise<{ id: string }> }) {
+  return (
+    <Suspense fallback={<div className="bg-background min-h-screen" />}>
+      <ProductPageContent params={params} />
+    </Suspense>
   )
 }
