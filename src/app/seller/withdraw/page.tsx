@@ -180,9 +180,17 @@ export default function WithdrawPage() {
 
         {/* 1. Balance card */}
         <section className="bg-white border border-border rounded-lg p-5 mb-8">
-          <p className="font-sans text-xs uppercase tracking-widest text-muted mb-3">
-            Available to withdraw
-          </p>
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <p className="font-sans text-xs uppercase tracking-widest text-muted">
+              Available to withdraw
+            </p>
+            <Link
+              href="/seller/withdraw/history"
+              className="font-sans text-xs text-accent hover:opacity-80 transition-opacity"
+            >
+              View history
+            </Link>
+          </div>
           <p className="font-serif text-4xl sm:text-5xl font-normal tabular-nums">
             ₦{AVAILABLE_BALANCE.toLocaleString('en-NG')}
           </p>
