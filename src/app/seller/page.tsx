@@ -1,8 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { Suspense, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Plus } from 'lucide-react'
 
 const SELLER = {
@@ -102,8 +102,14 @@ const STATUS_CONFIG: Record<string, { bg: string; text: string; label: string }>
   CANCELLED: { bg: 'bg-border', text: 'text-muted', label: 'Cancelled' },
 }
 
-export default function SellerPage() {
+function SellerPageContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  // ?empty=1 renders the brand-new-seller dashboard branch (₦0 balance,
+  // 0 sales, 0 products, 0 orders). Real implementation derives this
+  // from session-state checks against actual data.
+  const isEmpty = searchParams.get('empty') === '1'
+
   const [copiedText, setCopiedText] = useState<string | null>(null)
   const [shippingConfirm, setShippingConfirm] = useState<string | null>(null)
   const [orderStatuses, setOrderStatuses] = useState<Record<string, string>>(
@@ -113,6 +119,14 @@ export default function SellerPage() {
   // "Complete your shop" banner renders. Production ties this to session
   // state (avatar + about + location all set).
   const [profileBannerVisible, setProfileBannerVisible] = useState(true)
+
+  // Empty-state derived values
+  const balance = isEmpty ? 0 : STATS.availableBalance
+  const balanceSats = isEmpty ? 0 : STATS.sats
+  const totalSales = isEmpty ? 0 : STATS.totalSales
+  const totalEarned = isEmpty ? 0 : STATS.totalEarned
+  const orders = isEmpty ? [] : ORDERS
+  const products = isEmpty ? [] : PRODUCTS
 
   const handleCopyShopUrl = () => {
     navigator.clipboard.writeText(SELLER.shopUrl)
@@ -142,7 +156,7 @@ export default function SellerPage() {
             Bitscy
           </Link>
 
-          {/* Right: Avatar + Sign out */}
+          {/* Right: Avatar + Settings + Sign out */}
           <div className="flex items-center gap-3">
             <Link
               href="/profile"
@@ -151,6 +165,12 @@ export default function SellerPage() {
               aria-label="View profile"
             >
               {SELLER.initials}
+            </Link>
+            <Link
+              href="/seller/settings"
+              className="text-sm text-muted hover:text-foreground transition-colors font-sans hidden sm:inline"
+            >
+              Settings
             </Link>
             <button
               onClick={handleSignOut}
@@ -172,7 +192,7 @@ export default function SellerPage() {
                 {SELLER.name}
               </h1>
               <p className="font-sans text-sm sm:text-base text-muted mb-4">
-                {STATS.totalSales} sales · {PRODUCTS.length} products listed · Member since {SELLER.memberSince}
+                {totalSales} sales · {products.length} products listed · Member since {SELLER.memberSince}
               </p>
 
               {/* Shop URL Pill */}
@@ -229,22 +249,34 @@ export default function SellerPage() {
                     Available balance
                   </p>
                   <div className="mb-1">
-                    <p className="font-serif text-5xl sm:text-6xl font-normal text-foreground tabular-nums">
-                      ₦{STATS.availableBalance.toLocaleString('en-NG')}
+                    <p className={`font-serif text-5xl sm:text-6xl font-normal tabular-nums ${
+                      balance === 0 ? 'text-muted' : 'text-foreground'
+                    }`}>
+                      ₦{balance.toLocaleString('en-NG')}
                     </p>
                   </div>
-                  <p className="font-sans text-sm text-muted mb-1">
-                    ≈ {STATS.sats.toLocaleString('en-NG')} sats
+                  <p className="font-sans text-sm text-muted mb-1 tabular-nums">
+                    ≈ {balanceSats.toLocaleString('en-NG')} sats
                   </p>
                   <p className="font-sans text-xs text-muted mb-6">
                     Updated just now
                   </p>
-                  <Link
-                    href="/seller/withdraw"
-                    className="block w-full text-center bg-primary text-primary-foreground py-3 px-4 rounded font-sans font-medium hover:opacity-90 transition-opacity"
-                  >
-                    Withdraw to bank
-                  </Link>
+                  {balance === 0 ? (
+                    <button
+                      type="button"
+                      disabled
+                      className="block w-full text-center bg-primary text-primary-foreground py-3 px-4 rounded font-sans font-medium opacity-50 cursor-not-allowed"
+                    >
+                      Withdraw to bank
+                    </button>
+                  ) : (
+                    <Link
+                      href="/seller/withdraw"
+                      className="block w-full text-center bg-primary text-primary-foreground py-3 px-4 rounded font-sans font-medium hover:opacity-90 transition-opacity"
+                    >
+                      Withdraw to bank
+                    </Link>
+                  )}
                 </div>
 
                 {/* STATS ROW */}
@@ -253,16 +285,20 @@ export default function SellerPage() {
                     <p className="font-sans text-xs uppercase tracking-widest text-muted mb-3">
                       Total sales
                     </p>
-                    <p className="font-serif text-4xl sm:text-5xl font-normal text-foreground">
-                      {STATS.totalSales}
+                    <p className={`font-serif text-4xl sm:text-5xl font-normal ${
+                      totalSales === 0 ? 'text-muted' : 'text-foreground'
+                    }`}>
+                      {totalSales}
                     </p>
                   </div>
                   <div className="bg-card border border-border rounded-lg p-4">
                     <p className="font-sans text-xs uppercase tracking-widest text-muted mb-3">
                       Total earned
                     </p>
-                    <p className="font-serif text-2xl sm:text-3xl font-normal text-foreground tabular-nums">
-                      ₦{(STATS.totalEarned / 1000).toFixed(0)}k
+                    <p className={`font-serif text-2xl sm:text-3xl font-normal tabular-nums ${
+                      totalEarned === 0 ? 'text-muted' : 'text-foreground'
+                    }`}>
+                      ₦{(totalEarned / 1000).toFixed(0)}k
                     </p>
                   </div>
                 </div>
@@ -281,7 +317,27 @@ export default function SellerPage() {
                 </div>
 
                 <div className="space-y-3">
-                  {ORDERS.map(order => {
+                  {orders.length === 0 && (
+                    <div className="bg-card border border-border rounded-lg p-6 text-center">
+                      <div
+                        className="w-12 h-12 rounded-full border-2 mx-auto mb-4"
+                        style={{ borderColor: '#E8B43D' }}
+                        aria-hidden="true"
+                      />
+                      <p className="font-serif text-lg font-normal mb-2">No orders yet.</p>
+                      <p className="font-sans text-sm text-muted mb-4">
+                        Share your shop link to make your first sale.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleCopyShopUrl}
+                        className="font-sans text-sm text-accent hover:opacity-80 transition-opacity font-medium"
+                      >
+                        {copiedText === 'shop' ? 'Copied' : 'Copy shop link'}
+                      </button>
+                    </div>
+                  )}
+                  {orders.map(order => {
                     const status = orderStatuses[order.id]!
                     const config = STATUS_CONFIG[status]!
 
@@ -374,42 +430,68 @@ export default function SellerPage() {
                 </Link>
               </div>
 
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                {PRODUCTS.map(product => (
+              {products.length === 0 ? (
+                <div className="bg-white border border-dashed border-border rounded-lg p-8 text-center mb-6">
+                  <p className="font-serif text-2xl font-normal mb-2">Add your first piece.</p>
+                  <p className="font-sans text-sm text-muted mb-5 max-w-sm mx-auto">
+                    It takes 5 minutes. Photos, price, description, done.
+                  </p>
                   <Link
-                    key={product.id}
-                    href={`/seller/products/${product.id}/edit`}
-                    className="group block text-left hover:opacity-80 transition-opacity"
+                    href="/seller/products/new"
+                    className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-5 py-3 rounded font-sans text-sm font-medium hover:opacity-90 transition-opacity"
                   >
-                    <div className="aspect-square rounded-lg overflow-hidden mb-2 bg-muted">
-                      <img
-                        src={product.image}
-                        alt={product.title}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                      />
-                    </div>
-                    <h3 className="font-serif text-sm font-normal text-foreground line-clamp-1">
-                      {product.title}
-                    </h3>
-                    <p className="font-sans text-xs text-muted tabular-nums">
-                      ₦{product.price.toLocaleString('en-NG')}
-                    </p>
+                    <Plus size={16} />
+                    Add product
                   </Link>
-                ))}
-              </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                  {products.map(product => (
+                    <Link
+                      key={product.id}
+                      href={`/seller/products/${product.id}/edit`}
+                      className="group block text-left hover:opacity-80 transition-opacity"
+                    >
+                      <div className="aspect-square rounded-lg overflow-hidden mb-2 bg-muted">
+                        <img
+                          src={product.image}
+                          alt={product.title}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                        />
+                      </div>
+                      <h3 className="font-serif text-sm font-normal text-foreground line-clamp-1">
+                        {product.title}
+                      </h3>
+                      <p className="font-sans text-xs text-muted tabular-nums">
+                        ₦{product.price.toLocaleString('en-NG')}
+                      </p>
+                    </Link>
+                  ))}
+                </div>
+              )}
 
-              <div className="text-center">
-                <Link
-                  href="/seller/products"
-                  className="font-sans text-sm text-accent hover:opacity-80 transition-opacity"
-                >
-                  See all {PRODUCTS.length} products
-                </Link>
-              </div>
+              {products.length > 0 && (
+                <div className="text-center">
+                  <Link
+                    href="/seller/products"
+                    className="font-sans text-sm text-accent hover:opacity-80 transition-opacity"
+                  >
+                    See all {products.length} products
+                  </Link>
+                </div>
+              )}
             </div>
           </div>
         </div>
       </main>
     </div>
+  )
+}
+
+export default function SellerPage() {
+  return (
+    <Suspense fallback={<div className="bg-background min-h-screen" />}>
+      <SellerPageContent />
+    </Suspense>
   )
 }
