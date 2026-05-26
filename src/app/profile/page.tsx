@@ -132,11 +132,17 @@ export default function ProfilePage() {
             Bitscy
           </Link>
 
-          {/* Right: Avatar + Sign out */}
+          {/* Right: Avatar + Settings + Sign out */}
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-full flex items-center justify-center font-serif text-lg font-normal" style={{ backgroundColor: 'rgba(214, 121, 97, 0.2)', color: '#1F1410' }}>
               {BUYER.initials}
             </div>
+            <Link
+              href="/buyer/settings"
+              className="text-sm text-muted hover:text-foreground transition-colors font-sans hidden sm:inline"
+            >
+              Settings
+            </Link>
             <button
               onClick={handleSignOut}
               className="text-sm text-muted hover:text-foreground transition-colors font-sans"
