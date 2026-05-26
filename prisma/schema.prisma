@@ -8,26 +8,41 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+enum LedgerEntryType {
+  SALE // sats credited to seller from a buyer payment
+  WITHDRAWAL // sats debited when seller withdraws to NGN or Lightning
+  REFUND // sats debited when a refund is issued (v2)
+  ADJUSTMENT // manual correction (audit trail required)
+}
+
 model User {
-  id                String             @id @default(cuid())
-  npub              String             @unique
-  username          String             @unique
-  displayName       String?
-  avatar            String?
-  about             String?
-  lightningAddr     String?            @unique
-  role              UserRole           @default(BUYER)
-  encryptedKey      String?
-  keySalt           String?
-  keyIv             String?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  bankAccounts      BankAccount[]
-  ledgerEntries     LedgerEntry[]
+  id            String   @id @default(cuid())
+  npub          String   @unique // Nostr public key (hex, 64 chars — NOT bech32)
+  username      String   @unique
+  displayName   String?
+  avatar        String?
+  about         String?
+  location      String?  // e.g., "Lagos, Nigeria" — shown on storefront
+  lightningAddr String?  @unique // e.g., "adaeze@bitscy.com"
+  role          UserRole @default(BUYER)
+  closedAt      DateTime? // non-null = soft shop closure; null = open
+
+  // Client-side encrypted key storage.
+  // The server NEVER sees the password or plaintext nsec.
+  // The client does all crypto (PBKDF2 + AES-GCM) and sends only the encrypted blob.
+  encryptedKey String?
+  salt         String? // PBKDF2 salt (base64url)
+  iv           String? // AES-GCM IV (base64url)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products          Product[]
   ordersAsBuyer     Order[]            @relation("BuyerOrders")
   ordersAsSeller    Order[]            @relation("SellerOrders")
+  bankAccounts      BankAccount[]
+  ledgerEntries     LedgerEntry[]
   payouts           Payout[]
-  products          Product[]
   pushSubscriptions PushSubscription[]
 
   @@index([role])
@@ -36,21 +51,25 @@ model User {
 model Product {
   id           String        @id @default(cuid())
   sellerId     String
+  seller       User          @relation(fields: [sellerId], references: [id])
   title        String
-  description  String
+  description  String        @db.Text
   priceSats    BigInt
   shippingSats BigInt        @default(0)
   category     String
-  images       String[]
+  images       String[] // Cloudinary URLs
   isDigital    Boolean       @default(false)
-  digitalUrl   String?
+  digitalUrl   String? // For digital products only — stored encrypted in v2
   stock        Int           @default(1)
   status       ProductStatus @default(ACTIVE)
-  nostrEventId String?       @unique
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  orderItems   OrderItem[]
-  seller       User          @relation(fields: [sellerId], references: [id])
+
+  // Nostr backref — the kind 30018 event ID published when this product was created/updated
+  nostrEventId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orderItems OrderItem[]
 
   @@index([sellerId, status])
   @@index([status, createdAt])
@@ -58,23 +77,34 @@ model Product {
 }
 
 model Order {
-  id                String      @id @default(cuid())
-  buyerId           String
-  sellerId          String
-  totalSats         BigInt
-  shippingSats      BigInt      @default(0)
-  invoiceBolt11     String?
-  paymentHash       String?     @unique
-  status            OrderStatus @default(PENDING)
-  encryptedShipping String?
-  shippingNote      String?
-  nostrEventId      String?     @unique
-  createdAt         DateTime    @default(now())
-  paidAt            DateTime?
-  shippedAt         DateTime?
-  buyer             User        @relation("BuyerOrders", fields: [buyerId], references: [id])
-  seller            User        @relation("SellerOrders", fields: [sellerId], references: [id])
-  items             OrderItem[]
+  id       String @id @default(cuid())
+  buyerId  String
+  buyer    User   @relation("BuyerOrders", fields: [buyerId], references: [id])
+  sellerId String
+  seller   User   @relation("SellerOrders", fields: [sellerId], references: [id])
+
+  items        OrderItem[]
+  totalSats    BigInt
+  shippingSats BigInt      @default(0)
+
+  // Lightning payment details
+  invoiceBolt11 String?
+  paymentHash   String? @unique
+
+  status OrderStatus @default(PENDING)
+
+  // NIP-04 encrypted shipping address (only seller can decrypt)
+  encryptedShipping String? @db.Text
+
+  // Optional seller note when shipping
+  shippingNote String?
+
+  // Nostr backref — the kind 30019 event ID
+  nostrEventId String? @unique
+
+  createdAt DateTime  @default(now())
+  paidAt    DateTime?
+  shippedAt DateTime?
 
   @@index([buyerId, createdAt])
   @@index([sellerId, status])
@@ -84,11 +114,11 @@ model Order {
 model OrderItem {
   id        String  @id @default(cuid())
   orderId   String
+  order     Order   @relation(fields: [orderId], references: [id])
   productId String
+  product   Product @relation(fields: [productId], references: [id])
   quantity  Int     @default(1)
   priceSats BigInt
-  order     Order   @relation(fields: [orderId], references: [id])
-  product   Product @relation(fields: [productId], references: [id])
 
   @@index([orderId])
 }
@@ -96,12 +126,12 @@ model OrderItem {
 model BankAccount {
   id            String   @id @default(cuid())
   userId        String
+  user          User     @relation(fields: [userId], references: [id])
   bankName      String
   accountNumber String
   accountName   String
   isDefault     Boolean  @default(false)
   createdAt     DateTime @default(now())
-  user          User     @relation(fields: [userId], references: [id])
 
   @@index([userId])
 }
@@ -109,15 +139,15 @@ model BankAccount {
 model Payout {
   id            String       @id @default(cuid())
   userId        String
+  user          User         @relation(fields: [userId], references: [id])
   bankAccountId String
   amountSats    BigInt
   amountNgn     BigInt
   status        PayoutStatus @default(PENDING)
-  externalId    String?
+  externalId    String? // Bitnob payout ID (real, from sandbox API in v1)
   failureReason String?
   createdAt     DateTime     @default(now())
   completedAt   DateTime?
-  user          User         @relation(fields: [userId], references: [id])
 
   @@index([userId, createdAt])
 }
@@ -125,48 +155,48 @@ model Payout {
 model PushSubscription {
   id        String   @id @default(cuid())
   userId    String
-  endpoint  String   @unique
-  p256dh    String
-  auth      String
-  createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id])
+  endpoint  String   @unique @db.Text
+  p256dh    String   @db.Text
+  auth      String   @db.Text
+  createdAt DateTime @default(now())
 
   @@index([userId])
 }
 
+// LedgerEntry is the append-only record of every change to a
+// seller's sat balance. A seller's current balance is computed
+// as SUM(amountSats) WHERE userId = sellerId. Entries are
+// immutable; corrections use the ADJUSTMENT type, never an UPDATE.
 model LedgerEntry {
   id              String          @id @default(cuid())
   userId          String
-  amountSats      BigInt
-  type            LedgerEntryType
-  refId           String?
-  description     String
-  recordedNgnRate BigInt
-  createdAt       DateTime        @default(now())
   user            User            @relation(fields: [userId], references: [id])
+  amountSats      BigInt // positive = credit, negative = debit
+  type            LedgerEntryType
+  refId           String? // OrderId for SALE, PayoutId for WITHDRAWAL, etc.
+  description     String // human-readable, for audit trail
+  recordedNgnRate BigInt // BTC/NGN rate from CoinGecko at time of entry
+  createdAt       DateTime        @default(now())
 
   @@index([userId, createdAt])
 }
 
+// PendingPayment is short-lived. Maps an inbound Lightning paymentHash
+// to the seller and order it belongs to. Created when an invoice is
+// generated; deleted when the payment settles or expires.
 model PendingPayment {
   paymentHash String   @id
   sellerId    String
   amountSats  BigInt
-  orderId     String?
+  orderId     String? // null if direct LNURL pay outside marketplace flow
   description String
   createdAt   DateTime @default(now())
-  expiresAt   DateTime
+  expiresAt   DateTime // BOLT-11 expiry, typically 1 hour from creation
 
   @@index([orderId])
   @@index([sellerId])
   @@index([expiresAt])
-}
-
-enum LedgerEntryType {
-  SALE
-  WITHDRAWAL
-  REFUND
-  ADJUSTMENT
 }
 
 enum UserRole {

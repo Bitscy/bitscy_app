@@ -54,3 +54,6 @@ prisma/dev.db-journal
 package-lock.json
 yarn.lock
 
+# Local AI assistant instruction files (kept out of the open-source repo)
+CLAUDE.md
+**/CLAUDE.md
