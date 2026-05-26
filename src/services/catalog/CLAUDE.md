@@ -8,7 +8,7 @@ Everything from the moment Adaeze opens the app for the first time, through her 
 
 Specifically:
 
-- User and seller onboarding (signup, profile, server-side key management)
+- User and seller onboarding (signup, login, profile) — see "Auth and session handling" for the client-side-crypto model
 - Product CRUD (create, read, update, soft-delete)
 - Image upload pipeline via Cloudinary
 - Nostr publishing for products (kind 30018) and profiles (kind 0)
@@ -24,28 +24,55 @@ Specifically:
 - Seller balance ledger (Commerce role)
 - CoinGecko price service (Commerce role)
 - Frontend pages or components (Experience role)
-- Auth on the client side (Experience role generates buyer keys client-side; this role handles server-side auth verification only)
+- Client-side Nostr key generation, encryption, and signing (Experience role does this for both buyers and sellers; this role only persists the encrypted blob and verifies signatures)
 
 If you find yourself reasoning about orders, Lightning, or payments, stop. That's the Commerce engineer's territory.
 
 ## API endpoints you own
 
-- `POST /api/auth/signup` — create User, generate Nostr keypair server-side for buyers, accept npub for NIP-07 sellers
-- `POST /api/auth/login` — verify a NIP-07 signed challenge, issue session
-- `POST /api/auth/logout` — clear session
-- `GET /api/products` — paginated list with filters (category, sellerId)
+**Auth** (all responses set / clear an HttpOnly session cookie signed with `SESSION_SECRET`):
+
+- `POST /api/auth/signup` — create User. Accepts `{ username, displayName, role, npub, encryptedKey, salt, iv }` produced by the client. Server NEVER sees the password or plaintext nsec. Both buyer and seller signup hit this endpoint with different `role` values (`BUYER` | `SELLER`).
+- `POST /api/auth/challenge` — given `{ username }`, return `{ challenge, encryptedKey, salt, iv, npub }` so the client can decrypt locally and sign the challenge. On unknown username, return a fake-but-shaped response to prevent enumeration.
+- `POST /api/auth/login` — accepts `{ username, signedChallenge }`, verifies the signature against the stored npub, issues a session cookie. Works for both NIP-07 sellers and password-based users — the endpoint sees only a username + a signed challenge in both cases.
+- `POST /api/auth/logout` — clear the cookie.
+- `GET /api/auth/me` — return the current user (or 401). Used by every authenticated page to verify session state.
+- `PATCH /api/auth/me` — update profile fields (`displayName`, `avatar`, `about`, `location`, `lightningAddr`). Republishes the kind-0 Nostr event.
+- `POST /api/auth/change-password` — accept `{ encryptedKey, salt, iv }` (re-encrypted client-side with the new password) and replace the User's stored blob. Existing session stays valid.
+- `POST /api/auth/recovery` — return `{ encryptedKey, salt, iv }` for the authenticated user so the client can decrypt and display the recovery phrase. Requires the active session.
+- `POST /api/auth/close-shop` — soft-deactivate the seller: set `User.closedAt = now()` and cascade `Product.status = UNLISTED` for all of their products. Reversible by signing back in.
+
+**Catalog:**
+
+- `GET /api/products` — paginated list with filters (`category`, `sellerId`)
 - `GET /api/products/[id]` — single product
 - `POST /api/products` — create (auth: seller)
 - `PATCH /api/products/[id]` — update (auth: owner)
 - `DELETE /api/products/[id]` — soft-delete (sets status to UNLISTED)
 - `GET /api/shop/[username]` — seller profile + active products
+
+**Infrastructure:**
+
 - `POST /api/upload` — Cloudinary signed upload URL
 - `POST /api/nostr/publish` — publish a signed event to configured relays
 - `GET /api/nostr/profile/[npub]` — fetch kind 0 profile (with caching)
 
+## Required schema fields (beyond the current Prisma schema)
+
+The Experience-role designs reference a couple of `User` fields that don't yet exist in `prisma/schema.prisma`. Add these before wiring the seller pages:
+
+| Field             | Type        | Used by                                                                                |
+| ----------------- | ----------- | -------------------------------------------------------------------------------------- |
+| `User.location`   | `String?`   | Seller profile city line + storefront subtitle ("Handmade in Lagos, Nigeria")          |
+| `User.closedAt`   | `DateTime?` | Soft shop closure (`/api/auth/close-shop` sets it; null = open, non-null = closed)     |
+
+The encrypted-key fields (`encryptedKey`, `salt`, `iv`) are already implied by the client-side-crypto auth model below; if they aren't on the `User` model yet, add them as `String` columns at the same time.
+
+When `User.closedAt` is non-null, treat the seller as suspended: `GET /api/shop/[username]` returns the profile with an empty product list and `closed: true`, browse / category lists exclude their products, and `POST /api/products` from their session is rejected with a clear error.
+
 ## SDKs and libraries you work with
 
-**`nostr-tools`** — the standard JavaScript library for Nostr. Use for: keypair generation (`generateSecretKey`, `getPublicKey`), event signing (`finalizeEvent`), event encoding/decoding, relay publishing via `SimplePool`.
+**`nostr-tools`** — the standard JavaScript library for Nostr. Use for: keypair generation (`generateSecretKey`, `getPublicKey`), event signing (`finalizeEvent`), event encoding/decoding, relay publishing via `SimplePool`, signature verification via `verifyEvent`.
 
 **Cloudinary Node SDK** — for signed uploads. Generate a signature server-side, client uploads directly to Cloudinary using the signature. Files never pass through your server. Resize on upload (Cloudinary transformation params), don't store originals at full resolution.
 
@@ -53,36 +80,51 @@ If you find yourself reasoning about orders, Lightning, or payments, stop. That'
 
 ## The Postgres → Nostr publishing pattern
 
-This is the reusable primitive for everything you publish. Use it consistently.
+This is the reusable primitive for everything Bitscy publishes on behalf of a user. Use it consistently.
 
-1. Open a Prisma transaction.
-2. Create or update the Postgres record.
-3. Build the Nostr event object with the correct kind, tags, and content.
-4. Sign the event using the user's key (server-side using `SYSTEM_NSEC` for buyers, or pass-through from NIP-07 for sellers).
-5. Publish to all configured relays via `SimplePool.publish()`.
-6. Update the Postgres record with the event ID (so we have a back-reference).
-7. Commit the transaction.
+**The server never holds the user's secret key.** Events authored by a user are signed in the browser using their decrypted nsec (from IndexedDB) and sent to the server already signed. The server's job is to verify, persist, and forward to relays.
 
-If relay publishing fails, the Postgres record still exists. Don't fail the whole operation because one relay was down. Log the failure, return success to the caller. The data is still canonical in Postgres; the Nostr copy is best-effort.
+1. Receive the **pre-signed** Nostr event from the client alongside the request payload (e.g., `POST /api/products` accepts the product data AND `nostrEvent: SignedEvent`).
+2. Verify the event:
+   - `event.pubkey === session.user.npub` (the signer matches the authenticated user)
+   - `verifyEvent(event)` returns true (signature is valid)
+   - The event's `kind`, `tags`, and `content` match what the request claims (no signing one thing and storing another)
+3. Open a Prisma transaction.
+4. Create or update the Postgres record (using the data from the request, not the event content — Postgres is the typed authority for queryable fields).
+5. Update the Postgres record with `nostrEventId = event.id`.
+6. Commit the transaction.
+7. Publish the signed event to all configured relays via `SimplePool.publish()` (outside the transaction, so a slow relay doesn't hold a DB lock).
+
+The system-signed kind 0 path is the only exception: if the user updates non-essential profile fields and we need a kind 0 republish, the client still produces and signs the event. `SYSTEM_NSEC` exists for *Bitscy-authored* events (e.g., system announcements), not user-authored ones.
+
+If relay publishing fails entirely, the Postgres record still exists with a null `nostrEventId`. Don't fail the whole operation because one relay was down. Log the failure, return success to the caller. The data is still canonical in Postgres; the Nostr copy is best-effort.
 
 ## Common patterns you'll write
 
 **Creating a product:**
 
 ```typescript
-// Pseudocode
-async function createProduct(input: CreateProductInput, seller: User): Promise<Product> {
-  return prisma.$transaction(async (tx) => {
-    const product = await tx.product.create({ data: { ...input, sellerId: seller.id } });
-    const event = buildProductEvent(product, seller);
-    const signedEvent = finalizeEvent(event, getSellerKey(seller));
-    await publishToRelays(signedEvent);
-    const updated = await tx.product.update({
-      where: { id: product.id },
-      data: { nostrEventId: signedEvent.id },
+// Pseudocode — runs server-side after the client has signed the kind 30018 event in the browser
+async function createProduct(
+  input: CreateProductInput,
+  signedEvent: SignedNostrEvent,
+  session: Session,
+): Promise<Product> {
+  if (signedEvent.pubkey !== session.user.npub) throw new HttpError(403, 'PUBKEY_MISMATCH');
+  if (!verifyEvent(signedEvent)) throw new HttpError(400, 'INVALID_SIGNATURE');
+  assertEventMatchesProduct(signedEvent, input); // kind, tags, content sanity check
+
+  const product = await prisma.$transaction(async (tx) => {
+    const created = await tx.product.create({
+      data: { ...input, sellerId: session.user.id, nostrEventId: signedEvent.id },
     });
-    return updated;
+    return created;
   });
+
+  // Best-effort relay fan-out; don't block the API response on slow relays.
+  void publishToRelays(signedEvent);
+
+  return product;
 }
 ```
 
@@ -128,25 +170,88 @@ You do not store images on your server. You do not store image binaries in Postg
 
 ## Auth and session handling
 
-For sellers with NIP-07 (browser extension):
+**Mission constraint: Bitscy never sees the user's password or plaintext Nostr secret key.** Everything cryptographic happens client-side. The server only ever stores an opaque encrypted blob and verifies signed challenges.
 
-1. Server issues a random challenge string.
-2. Client signs the challenge with their Nostr private key via NIP-07.
-3. Server verifies the signature against the claimed pubkey.
-4. Server issues an HTTP-only session cookie.
+### Signup (`POST /api/auth/signup`)
 
-For buyers (no NIP-07 expected):
+The client does the heavy lifting:
 
-- Auto-generate a keypair server-side on first purchase.
-- Encrypt the private key with a buyer-supplied passphrase (use `crypto.subtle` AES-GCM).
-- Store encrypted private key in the User record.
-- Issue session cookie.
+1. Client generates a fresh Nostr keypair via `nostr-tools` `generateSecretKey` + `getPublicKey`.
+2. Client derives a key from the user's password using `crypto.subtle.deriveKey` with PBKDF2 (SHA-256, ≥100,000 iterations, random 16-byte salt).
+3. Client encrypts the secret key with AES-GCM (random 12-byte IV).
+4. Client POSTs `{ username, displayName, role, npub, encryptedKey, salt, iv }` to the server. **The password and plaintext nsec never leave the browser.**
+5. Server validates username uniqueness, persists `{ username, displayName, role, npub, encryptedKey, salt, iv }` on the `User` row, issues an HMAC-signed HttpOnly session cookie via `src/lib/session.ts`, returns the safe `User` shape.
 
-Sessions are HTTP-only cookies, 7-day expiry, refreshed on each authenticated request.
+The client also stores the plaintext nsec in IndexedDB (encrypted-at-rest with the same key) so subsequent product creations can sign without re-prompting for the password.
+
+### Login (challenge-response)
+
+NIP-07 sellers and password-only users go through the same shape; only the local signing path differs.
+
+1. Client `POST /api/auth/challenge` with `{ username }`.
+2. Server looks up the user. On match, returns `{ challenge, encryptedKey, salt, iv, npub }`. On miss, returns a **shape-identical fake response** with random bytes to prevent username enumeration.
+3. Client decrypts the secret key locally (PBKDF2 → AES-GCM unwrap). If decryption fails (wrong password), the client never contacts the server again — the failure is purely client-side.
+4. Client signs the challenge with the secret key (or via NIP-07 if available) and POSTs `{ username, signedChallenge }` to `/api/auth/login`.
+5. Server verifies the signature against the stored `npub`. On success, issues the session cookie.
+
+This gives us:
+
+- **Zero-knowledge auth.** A database breach reveals only encrypted blobs.
+- **No timing oracle.** The server runs the same DB lookup and same response shape regardless of whether the username exists.
+- **No password reset.** The recovery phrase IS the reset mechanism — see below.
+
+### Session
+
+- HttpOnly, Secure (in production), SameSite=Lax, 7-day expiry.
+- Cookies are HMAC-signed with `SESSION_SECRET` (see `src/lib/session.ts`).
+- Refreshed on each authenticated request that mutates state.
+
+### Changing password (`POST /api/auth/change-password`)
+
+The client re-derives a key from the new password, re-encrypts the secret key, and POSTs the new `{ encryptedKey, salt, iv }`. The server replaces the stored blob. No server-side verification of the *old* password is possible — that check happens client-side by attempting to decrypt the current blob first.
+
+### Recovery phrase reveal (`POST /api/auth/recovery`)
+
+Returns the encrypted blob to the authenticated client; the client decrypts using the password the user re-enters in the UI, then displays the 12-word mnemonic (or hex nsec) once. Useful for the "Show recovery phrase" flow in seller settings.
+
+### Closing a shop (`POST /api/auth/close-shop`)
+
+Soft-deactivate: set `User.closedAt = now()` and cascade `Product.status = UNLISTED` for that seller's products in the same transaction. The user can still sign back in — closure is reversible, not account deletion.
+
+### Rate limiting
+
+`/api/auth/challenge` and `/api/auth/login` are rate-limited per IP (5 attempts per minute). Repeated failures don't reveal whether the username exists, but they do throttle the requesting IP.
+
+## Username slug derivation
+
+The seller chooses a *display* shop name during signup ("Adaeze's Studio"). The Catalog backend derives the URL-safe `username` slug used in `/shop/[username]`, the seller's Lightning Address (`<username>@bitscy.com`), and the kind-0 / kind-30018 author identity.
+
+**Rules** (applied in order):
+
+1. Lowercase.
+2. NFKD-normalize and strip combining marks (so `é → e`).
+3. Replace any run of characters NOT in `[a-z0-9]` with a single hyphen.
+4. Trim leading and trailing hyphens.
+5. Collapse consecutive hyphens.
+6. Reject if length < 3 or > 30 characters.
+7. Reject if the slug is in the reserved list below.
+8. If the slug already exists in the `User` table, append `-2`, `-3`, ... and re-check. Cap at `-99`; if none free, return a clean 409 asking the user to choose another name.
+
+**Reserved usernames** (cannot be claimed; preserve for routing and admin):
+
+```
+admin, api, app, auth, bitscy, buyer, cart, checkout, dashboard,
+help, home, login, logout, me, marketplace, nostr, orders, payout,
+products, profile, search, sell, seller, settings, shop, signup,
+support, system, terms, wallet, www
+```
+
+Add new reserved words to this list before introducing new top-level routes. The check lives in `src/services/catalog/repository.ts` alongside the username uniqueness check.
 
 ## Known gotchas
 
 - **`nostr-tools` event signing.** Use `finalizeEvent(eventTemplate, secretKey)`. The template needs `kind`, `created_at`, `tags`, `content`. The function adds `id`, `pubkey`, `sig`.
+- **`npub` is stored as hex (64-char hex string).** `event.pubkey` from nostr-tools is always hex — storing npub as hex means `event.pubkey === user.npub` works directly. When displaying to users, call `nip19.npubEncode(user.npub)` for the bech32 form.
 - **Relay connection management.** Use `SimplePool` from `nostr-tools`. Don't open new connections per request — the pool handles connection reuse.
 - **Cloudinary upload presets.** Make sure the unsigned upload preset is disabled in your Cloudinary dashboard. Always use signed uploads.
 - **Product images array order matters.** First image is the cover. Preserve order on update.
@@ -170,7 +275,7 @@ Build features in this order. Do not start feature N+1 until feature N's accepta
 
 For each feature: read the prerequisites, gather any external accounts/keys needed, build, test, mark complete, move on.
 
-### Feature C1 — Database connection and Prisma client
+### Feature C1 — Database connection and Prisma client ✅ done
 
 **Prerequisites:** Supabase project created (✅ already done). `DATABASE_URL` and `DIRECT_URL` env vars set locally and in Vercel.
 
@@ -198,73 +303,91 @@ Open the browser UI. Confirm all expected tables exist and you can read/write ro
 
 ---
 
-### Feature C2 — User signup (server-generated Nostr key path)
+### Feature C2 — User signup (client-side-crypto path) ✅ done
 
-**Prerequisites:** C1 complete. `SYSTEM_NSEC` env var generated and set. `SESSION_SECRET` set.
+**Prerequisites:** C1 complete. `SESSION_SECRET` set. Required schema fields applied (`User.encryptedKey`, `salt`, `iv`, `location`, `closedAt`).
 
 **Build:**
 
 - `POST /api/auth/signup` endpoint that:
-  1. Accepts `{ username, password, displayName }`.
-  2. Validates username uniqueness (DB constraint + nice error).
-  3. Generates a fresh Nostr keypair using `generateSecretKey` + `getPublicKey` from `nostr-tools`.
-  4. Encrypts the private key using AES-GCM with a key derived from the user's password (use `crypto.subtle.deriveKey` with PBKDF2, ≥100k iterations).
-  5. Stores `{ npub, encryptedKey, salt, iv }` in the `User` row alongside username.
-  6. Issues an HTTP-only session cookie (signed with `SESSION_SECRET`, 7-day expiry).
-  7. Returns `{ user: User }` (no key material).
+  1. Accepts `{ username: string, displayName: string, role: 'BUYER' | 'SELLER', npub: string, encryptedKey: string, salt: string, iv: string }`. **The server never receives the password or plaintext nsec.**
+  2. Derives the URL-safe slug from `username` using the rules in "Username slug derivation". Validates it doesn't collide with reserved words.
+  3. Validates slug uniqueness against the DB (clean 409 on collision).
+  4. Validates the `npub` is a well-formed 32-byte hex pubkey (64 hex chars).
+  5. Inserts the `User` row with `{ username: slug, displayName, role, npub, encryptedKey, salt, iv }`.
+  6. Issues an HMAC-signed HttpOnly session cookie via `src/lib/session.ts` (7-day expiry).
+  7. Returns the safe `User` shape from `src/types/shared.ts` (no key material).
+
+The Experience role handles all key generation and encryption client-side (`nostr-tools` + `crypto.subtle`). This route is a thin persister.
 
 **Smoke test:**
 
 ```bash
+# Simulate what the client sends (in real flow, this comes from the browser)
 curl -X POST http://localhost:3000/api/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"username":"testseller","password":"correcthorsebatterystaple","displayName":"Test Seller"}'
+  -d '{
+    "username":"Adaeze Studio",
+    "displayName":"Adaeze",
+    "role":"SELLER",
+    "npub":"<64 hex chars>",
+    "encryptedKey":"<base64 ciphertext>",
+    "salt":"<base64 16 bytes>",
+    "iv":"<base64 12 bytes>"
+  }'
 ```
 
-Expect a 200 with `{ user: {...} }` and a `Set-Cookie` header.
+Expect 200 with `{ user: { username: "adaeze-studio", ... } }` and a `Set-Cookie` header.
 
 **Acceptance criteria:**
 
-- Signup creates a User row visible in Supabase.
-- `npub` matches what `getPublicKey(secretKey)` returns for the secret.
-- Duplicate username returns a clean 409 error, not a 500.
-- Encrypted key cannot be decrypted without the password (verify by trying a wrong password and confirming decryption fails).
-- Session cookie is HttpOnly, Secure (in production), SameSite=Lax.
+- Signup creates a User row in Supabase with the derived slug, not the raw display string.
+- Duplicate slug returns a clean 409, never a 500.
+- The server logs do NOT contain the encryptedKey, salt, or iv values (verify by tailing logs during signup).
+- A request missing any of the six required fields returns a 400 with a typed error code, not a 500.
+- The session cookie is HttpOnly, Secure (in production), SameSite=Lax.
+- Reserved usernames (`admin`, `api`, etc.) are rejected.
 
-**Risks:** Storing keys with weak encryption is worse than not encrypting at all. Use PBKDF2 with ≥100k iterations, not raw SHA256. Test the wrong-password path.
+**Risks:** Trusting client-supplied `npub` is fine — at worst, the user encrypts their own nonsense and can't log in later. But validate the hex format so we don't poison downstream Nostr publishing.
 
 ---
 
-### Feature C3 — User login
+### Feature C3 — Challenge-response login ✅ done
 
 **Prerequisites:** C2 complete.
 
 **Build:**
 
+- `POST /api/auth/challenge` endpoint that:
+  1. Accepts `{ username }`.
+  2. Looks up the user (case-insensitive on the derived slug).
+  3. On match: generate a random 32-byte challenge (hex), return `{ challenge, encryptedKey, salt, iv, npub }`. Stash the challenge in a short-lived signed cookie (60-second TTL).
+  4. On miss: return a **shape-identical** response with random bytes for `challenge`, `encryptedKey`, `salt`, `iv`, and a random-but-valid-shaped `npub`. The client will fail decryption and surface a generic "invalid credentials" — the server never tells either path apart.
 - `POST /api/auth/login` endpoint that:
-  1. Looks up the user by username.
-  2. Decrypts the stored key with the provided password.
-  3. If decryption succeeds → issue session cookie.
-  4. If decryption fails → return 401 with neutral error ("invalid credentials" — never reveal whether the username exists).
-- `POST /api/auth/logout` clears the cookie.
-- `GET /api/auth/me` returns the current user (or 401).
-
-**Smoke test:** Sign up, log out, log back in. Confirm the session cookie changes and `GET /api/auth/me` reflects the new state.
+  1. Accepts `{ username, signedChallenge }` where `signedChallenge` is a full signed Nostr event (the client calls `finalizeEvent({ kind: 27235, content: challenge, tags: [] })` with their decrypted nsec).
+  2. Reads the expected challenge from the signed challenge cookie.
+  3. Verifies: `event.pubkey === stored npub`, `event.content === cookie challenge`, `verifyEvent(event) === true`.
+  4. On valid — issue HMAC-signed HttpOnly session cookie via `src/lib/session.ts`. Clear the challenge cookie.
+  5. On invalid or expired challenge — 401 with `{ error: { code: 'INVALID_CREDENTIALS' } }`.
+- `POST /api/auth/logout` clears the session cookie.
+- `GET /api/auth/me` returns the current `User` (or 401).
 
 **Acceptance criteria:**
 
-- Correct password → session issued.
-- Wrong password → 401 with no information leak.
+- Valid signature → session issued.
+- Wrong password (client fails to decrypt, never reaches `/api/auth/login`) → no server-side trace.
+- Forged signature → 401 with no information leak.
+- Unknown username → `/api/auth/challenge` returns the same shape and roughly the same response time as a known username (within 50ms).
 - Logout invalidates the session (next `/api/auth/me` returns 401).
-- Brute-force protection: rate limit `/api/auth/login` to 5 attempts per IP per minute.
+- Rate limit: `/api/auth/challenge` and `/api/auth/login` capped at 5 attempts per IP per minute.
 
-**Risks:** Timing attacks on the username lookup. Use a constant-time comparison or always run the decryption attempt even on unknown usernames.
+**Risks:** The challenge must be single-use — verify-then-clear, otherwise replay is trivial.
 
 ---
 
-### Feature C4 — Cloudinary signed upload
+### Feature C4 — Cloudinary signed upload ✅ done
 
-**Prerequisites:** C1 complete. Cloudinary signed preset `bitscy_products` exists (✅ already done). `CLOUDINARY_*` env vars set.
+**Prerequisites:** C1 complete. Cloudinary signed preset `bitscy_products` exists. `CLOUDINARY_*` env vars set.
 
 **Build:**
 
@@ -276,19 +399,6 @@ Expect a 200 with `{ user: {...} }` and a `Set-Cookie` header.
   5. Returns `{ uploadUrl, params }` to the client.
 - The client uploads directly to Cloudinary using the signature; the file never passes through Bitscy's server.
 
-**Smoke test:**
-
-```bash
-# Get an upload URL
-curl -X POST http://localhost:3000/api/upload \
-  -H "Cookie: session=..." \
-  -H "Content-Type: application/json" \
-  -d '{"filename":"test.jpg","contentType":"image/jpeg","sizeBytes":50000}'
-
-# Then use the returned URL with curl --form to upload an actual image.
-# Confirm the image appears at the expected Cloudinary URL.
-```
-
 **Acceptance criteria:**
 
 - Logged-in user can request and use a signed upload URL.
@@ -296,11 +406,9 @@ curl -X POST http://localhost:3000/api/upload \
 - The returned Cloudinary URL is publicly accessible and shows the uploaded image.
 - Validation rejects oversize or non-image files cleanly.
 
-**Risks:** A misconfigured Cloudinary preset (allowing unsigned uploads) is a security bug — anyone could fill the account. Re-verify preset signing mode before declaring done.
-
 ---
 
-### Feature C5 — Product creation (Postgres only, no Nostr yet)
+### Feature C5 — Product creation (Postgres only, no Nostr yet) ✅ partial
 
 **Prerequisites:** C2 + C4 complete.
 
@@ -313,15 +421,6 @@ curl -X POST http://localhost:3000/api/upload \
   4. Inserts into the `Product` table with `sellerId = session.userId`, `status = 'ACTIVE'`.
   5. Returns the created Product.
 
-**Smoke test:**
-
-```bash
-curl -X POST http://localhost:3000/api/products \
-  -H "Cookie: session=..." \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Lagos Sunset","description":"Acrylic on canvas","priceSats":"5000","shippingSats":"500","category":"paintings","images":["https://res.cloudinary.com/dbx8nta1v/image/upload/v1/bitscy/products/test.jpg"],"isDigital":false,"stock":1}'
-```
-
 **Acceptance criteria:**
 
 - Product appears in DB with correct sellerId and all fields.
@@ -329,11 +428,9 @@ curl -X POST http://localhost:3000/api/products \
 - Non-authenticated request returns 401.
 - A user cannot create a product as another seller (sellerId always comes from session, never from input).
 
-**Risks:** Trusting client-provided sellerId is a privilege escalation bug. Always pull it from the session.
-
 ---
 
-### Feature C6 — Product read endpoints
+### Feature C6 — Product read endpoints ✅ partial
 
 **Prerequisites:** C5 complete.
 
@@ -343,14 +440,6 @@ curl -X POST http://localhost:3000/api/products \
 - `GET /api/products/[id]` — single product with seller info joined.
 - `GET /api/shop/[username]` — seller's profile + active products.
 
-**Smoke test:**
-
-```bash
-curl http://localhost:3000/api/products
-curl http://localhost:3000/api/products/<id>
-curl http://localhost:3000/api/shop/testseller
-```
-
 **Acceptance criteria:**
 
 - List endpoint returns 20 most recent active products by default.
@@ -358,14 +447,11 @@ curl http://localhost:3000/api/shop/testseller
 - Shop endpoint excludes products with status `UNLISTED`.
 - Response shape matches the `Product` type from shared types exactly.
 
-**Risks:** N+1 queries when joining seller info. Use Prisma `include`, not separate queries per product.
-
 ---
 
-### Feature C7 — Nostr publishing service (foundational)
+### Feature C7 — Nostr publishing service (foundational) ✅ done
 
 **Prerequisites:** C5 complete. `NEXT_PUBLIC_NOSTR_RELAYS` env var set.
-**External dependency:** Verify the relay list is live — for each relay in the env var, ping it with `wscat -c wss://relay.damus.io` and confirm it accepts a connection. If any relay is dead, find a replacement from https://nostr.watch.
 
 **Build:**
 
@@ -376,27 +462,6 @@ curl http://localhost:3000/api/shop/testseller
 - Uses `SimplePool` from `nostr-tools`. Publishes to all configured relays in parallel with a 5-second timeout per relay.
 - Returns successes and failures separately. Does NOT throw if some relays fail — best-effort.
 
-**Smoke test:**
-
-```bash
-# Create a minimal test script src/scripts/test-nostr.ts:
-# - generateSecretKey()
-# - finalizeEvent({ kind: 1, content: 'hello bitscy', tags: [], created_at: now })
-# - publishEvent(signed)
-# - Log results
-pnpm tsx src/scripts/test-nostr.ts
-```
-
-Expect `acceptedBy.length >= 1`. Verify the event appears at https://relay.nostr.watch by searching by pubkey.
-
-**Acceptance criteria:**
-
-- Publishing a signed event returns at least one accepting relay.
-- If you point at a known-dead relay, it appears in `failedRelays` but the whole call still resolves (not rejects).
-- The event is queryable on at least one public relay scanner within 10 seconds.
-
-**Risks:** Public relays are flaky. Always publish to at least 3. Don't gate user flows on relay confirmation.
-
 ---
 
 ### Feature C8 — Product creation with Nostr publishing
@@ -405,26 +470,11 @@ Expect `acceptedBy.length >= 1`. Verify the event appears at https://relay.nostr
 
 **Build:**
 
-- Modify `POST /api/products` (from C5) to also:
-  1. After the Postgres insert, construct a kind 30018 Nostr event with the product details (see root CLAUDE.md for the exact shape).
-  2. Sign the event using the seller's decrypted private key (decrypted at login time and cached in session, OR re-decrypted from the User row using a short-lived token — pick one pattern and stick with it).
-  3. Call `publishEvent`.
-  4. Update the Product row with `nostrEventId = signedEvent.id`.
-- Wrap steps 1-4 in a Prisma transaction so the product creation and event ID update are atomic. If Nostr publishing fails entirely (zero relays accept), still commit the product but leave `nostrEventId` null and log the failure.
-
-**Smoke test:** Create a product via API. Confirm:
-
-- Postgres row has the product.
-- The Nostr event ID is set.
-- Searching the event ID on https://relay.nostr.watch shows the event content matching the product.
-
-**Acceptance criteria:**
-
-- Every newly created product has a non-null `nostrEventId` in the happy path.
-- If all relays fail, the product still exists in Postgres (logged warning).
-- Product update (`PATCH`) republishes with the same `d` tag (replaceable event).
-
-**Risks:** Slow relay timeout blocks the API response. Use a 5-second total timeout for the publish call.
+- Modify `POST /api/products` to also:
+  1. Accept a `nostrEvent: SignedNostrEvent` field on the request body alongside the product input. The client constructs the kind 30018 event in the browser, signs it with the user's decrypted nsec, and POSTs the signed event together with the product data. The server never sees the secret key.
+  2. Verify the event: `event.pubkey === session.user.npub`, `verifyEvent(event) === true`, and the event's `d` tag matches the new product ID. Reject with 400 if any check fails.
+  3. Insert the product row with `nostrEventId = event.id` set up front.
+  4. Call `publishEvent(event)` outside the transaction (best-effort relay fan-out).
 
 ---
 
@@ -437,30 +487,87 @@ Expect `acceptedBy.length >= 1`. Verify the event appears at https://relay.nostr
 - `PATCH /api/products/[id]` — update fields. Authorization check: `product.sellerId === session.userId`. Republish Nostr event with same `d` tag.
 - `DELETE /api/products/[id]` — soft-delete (set status to `UNLISTED`). Republish Nostr event with `["status", "unlisted"]` tag.
 
-**Smoke test:** Create → update title → delete. Verify each step in Postgres and on Nostr.
-
 **Acceptance criteria:**
 
 - Non-owner cannot update (returns 403).
 - Soft-deleted products are excluded from `GET /api/products` and shop endpoints.
 - Soft-deleted products are still readable by their owner.
-- Order history referencing the product still works (`OrderItem.productTitle` was snapshotted at order time).
 
 ---
 
-### Feature C10 — Profile publishing (Nostr kind 0)
+### Feature C10 — Profile read + publishing (Nostr kind 0)
 
 **Prerequisites:** C2 + C7 complete.
 
 **Build:**
 
-- `PATCH /api/auth/profile` — update display name, bio, avatar (Cloudinary URL).
-- After the Postgres update, publish a kind 0 Nostr event with `{ name, about, picture }` in the content.
+- `GET /api/auth/me` — return the current authenticated `User` (or 401).
+- `PATCH /api/auth/me` — update `displayName`, `avatar` (Cloudinary URL), `about`, `location`, `lightningAddr`. Validate with Zod.
+  - Accepts an optional `nostrEvent: SignedNostrEvent` (pre-signed kind 0 event from the client). If provided, verify and publish it. If not provided (e.g., buyer without a Nostr key), just update Postgres.
+- After the Postgres update, if a signed event was provided, publish to all configured relays.
 
 **Acceptance criteria:**
 
-- Profile update appears on Nostr relays under the user's pubkey.
-- Profile data on https://primal.net/p/<npub> matches what's in Postgres.
+- `GET /api/auth/me` reflects the latest profile state immediately after a PATCH.
+- Profile update appears on Nostr relays under the user's pubkey (when event is provided).
+- `location` and `lightningAddr` round-trip through the API correctly.
+
+---
+
+### Feature C11 — Change password
+
+**Prerequisites:** C2 + C3 complete.
+
+**Build:**
+
+- `POST /api/auth/change-password` endpoint that:
+  1. Requires an authenticated session.
+  2. Accepts `{ encryptedKey, salt, iv }` — the secret key re-encrypted client-side with the new password.
+  3. Replaces those three fields on the authenticated user's `User` row in a single transaction.
+  4. Returns `204`. The existing session cookie stays valid (user doesn't have to re-login).
+
+---
+
+### Feature C12 — Recovery phrase reveal
+
+**Prerequisites:** C2 complete.
+
+**Build:**
+
+- `POST /api/auth/recovery` endpoint that:
+  1. Requires an authenticated session.
+  2. Returns `{ encryptedKey, salt, iv }` for the authenticated user.
+- The client decrypts it (re-prompting for the password to confirm intent), converts the secret key to a 12-word BIP39 mnemonic, and displays it once.
+
+---
+
+### Feature C13 — Close shop (soft deactivation)
+
+**Prerequisites:** C2 + C9 complete.
+
+**Build:**
+
+- `POST /api/auth/close-shop` endpoint that:
+  1. Requires an authenticated session with `role === 'SELLER'`.
+  2. Opens a Prisma transaction:
+     - Set `User.closedAt = now()`.
+     - Set `Product.status = 'UNLISTED'` for every active product by that seller.
+  3. Returns `{ closedAt, unlistedCount }`.
+
+---
+
+### Feature C14 — Schema migration for `location` + `closedAt`
+
+**Prerequisites:** C1 complete.
+
+**Build:**
+
+- Add to `User` model in `prisma/schema.prisma`:
+  - `location String?`
+  - `closedAt DateTime?`
+  - `encryptedKey String?`, `salt String?`, `iv String?` (if not already present)
+- Run `pnpm db:push` (dev) or tracked migration.
+- Regenerate Prisma client: `pnpm prisma generate`.
 
 ---
 
@@ -478,7 +585,7 @@ End-to-end sequence:
 8. View `/api/shop/adaeze` → see her profile and both active products.
 9. Verify on a Nostr relay scanner that adaeze's pubkey shows: kind 0 profile event + 2 kind 30018 product events.
 
-If all 9 steps pass, Catalog role is functionally done and ready for the cross-role integration test (described at the end of the Commerce build sequence).
+If all 9 steps pass, Catalog role is functionally done and ready for the cross-role integration test.
 
 ---
 

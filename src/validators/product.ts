@@ -32,6 +32,7 @@ export const listProductsQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(50).default(20),
   category: ProductCategorySchema.optional(),
+  sellerId: z.string().optional(),
 });
 
 export type CreateProductData = z.infer<typeof createProductSchema>;

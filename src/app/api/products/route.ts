@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { listProducts, createProductForSeller } from '@/services/catalog/service';
-import { getSessionUserId } from '@/services/auth/session';
+import { getSession } from '@/lib/session';
 import { requireSeller } from '@/services/auth/service';
 import { handleApiError, ApiError } from '@/lib/api-error';
 import { createProductSchema, listProductsQuerySchema } from '@/validators/product';
@@ -28,14 +28,14 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await requireSeller(getSessionUserId());
+    const session = requireSeller(await getSession());
 
     const body = createProductSchema.safeParse(await req.json());
     if (!body.success) {
       throw new ApiError('VALIDATION_ERROR', body.error.issues[0]?.message ?? 'Invalid input', 400, body.error.flatten());
     }
 
-    const product = await createProductForSeller(body.data, user.id);
+    const product = await createProductForSeller(body.data, session.userId);
     return NextResponse.json({ product }, { status: 201 });
   } catch (err) {
     if (err instanceof z.ZodError) {

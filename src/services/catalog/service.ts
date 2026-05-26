@@ -2,7 +2,7 @@ import type { Product, CreateProductInput, UpdateProductInput, SellerInfo } from
 import { ApiError } from '@/lib/api-error';
 import { satsToNgn, formatNgn } from '@/lib/currency';
 import { signEventWithSystemKey } from '../nostr/signing';
-import { publishEvent } from '../nostr/client';
+import { publishEvent } from '../nostr/publisher';
 import { buildProductEventTemplate } from '../nostr/events';
 import * as repository from './repository';
 
