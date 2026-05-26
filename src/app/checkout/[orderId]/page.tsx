@@ -1,8 +1,9 @@
 'use client'
 
-import { use, useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
-import { ChevronLeft, Copy, Check } from 'lucide-react'
+import { Suspense, use, useState, useEffect } from 'react'
+import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { ChevronLeft, Copy, Check, Loader2 } from 'lucide-react'
 
 interface MockProduct {
   id: string
@@ -33,9 +34,15 @@ const PRODUCTS: Record<string, MockProduct> = {
 
 const MOCK_INVOICE = 'lnbc280000n1pj0q5zppp5dzxqwk8pqvnkd0j8y3z9f5k0xwmlq4r0p6v2h9k1c5n0d7m8l9j'
 
-export default function CheckoutPage({ params }: { params: Promise<{ orderId: string }> }) {
+function CheckoutPageContent({ params }: { params: Promise<{ orderId: string }> }) {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { orderId } = use(params)
+
+  // ?walletReady=1 is set when the buyer returns from /wallet/setup.
+  // Surfaces the "Pay with your Bitscy wallet" option alongside the QR.
+  const walletReady = searchParams.get('walletReady') === '1'
+  const [payingFromWallet, setPayingFromWallet] = useState(false)
   const [step, setStep] = useState(1)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -556,17 +563,41 @@ export default function CheckoutPage({ params }: { params: Promise<{ orderId: st
 
                 <div className="text-sm font-sans text-muted">
                   Don&apos;t have a Lightning wallet?{' '}
-                  <button
-                    onClick={() => {
-                      alert(
-                        'You can use Wallet of Satoshi, Phoenix, or other Lightning wallets to complete this payment.'
-                      )
-                    }}
+                  <Link
+                    href={`/wallet/setup?return=${encodeURIComponent(`/checkout/${orderId}`)}`}
                     className="text-accent hover:text-primary transition-colors"
                   >
                     Pay from your phone in seconds →
-                  </button>
+                  </Link>
                 </div>
+
+                {/* Pay with embedded Bitscy wallet — only when wallet is ready */}
+                {walletReady && (
+                  <div className="border-t border-border pt-4 space-y-3">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setPayingFromWallet(true)
+                        await new Promise(r => setTimeout(r, 1500))
+                        handlePaymentConfirmed()
+                      }}
+                      disabled={payingFromWallet}
+                      className="w-full py-3 bg-primary text-primary-foreground rounded font-sans font-medium hover:opacity-90 transition-opacity disabled:opacity-70 flex items-center justify-center gap-2"
+                    >
+                      {payingFromWallet ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Sending from your wallet…
+                        </>
+                      ) : (
+                        `Pay ₦${total.toLocaleString()} with your Bitscy wallet`
+                      )}
+                    </button>
+                    <p className="font-sans text-xs text-muted text-center">
+                      Pays from the wallet you set up on this device.
+                    </p>
+                  </div>
+                )}
 
                 {/* Demo button to confirm payment */}
                 <button
@@ -581,5 +612,13 @@ export default function CheckoutPage({ params }: { params: Promise<{ orderId: st
         )}
       </div>
     </div>
+  )
+}
+
+export default function CheckoutPage({ params }: { params: Promise<{ orderId: string }> }) {
+  return (
+    <Suspense fallback={<div className="bg-background min-h-screen" />}>
+      <CheckoutPageContent params={params} />
+    </Suspense>
   )
 }
