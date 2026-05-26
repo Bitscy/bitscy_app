@@ -1,135 +1,134 @@
-import { generateSecretKey, getPublicKey, nip19 } from 'nostr-tools';
+import { randomBytes } from 'crypto';
+import { verifyEvent } from 'nostr-tools';
+import type { Event as NostrEvent } from 'nostr-tools';
 
 import * as repository from '../catalog/repository';
 import { ApiError } from '@/lib/api-error';
 import type { SessionData } from '@/lib/session';
 import type { User } from '@/types/shared';
-import { buildProfileEventTemplate } from '../nostr/events';
-import { signEventWithKey } from '../nostr/signing';
 import { publishEvent } from '../nostr/publisher';
 
-const PBKDF2_ITERATIONS = 100_000;
+// ============================================================================
+// Signup
+// ============================================================================
 
-async function encryptSecretKey(
-  secretKey: Uint8Array<ArrayBuffer>,
-  password: string,
-): Promise<{ encryptedKey: string; keySalt: string; keyIv: string }> {
-  const salt = new Uint8Array(16) as Uint8Array<ArrayBuffer>;
-  const iv = new Uint8Array(12) as Uint8Array<ArrayBuffer>;
-  crypto.getRandomValues(salt);
-  crypto.getRandomValues(iv);
-
-  const baseKey = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(password),
-    'PBKDF2',
-    false,
-    ['deriveKey'],
-  );
-
-  const derivedKey = await crypto.subtle.deriveKey(
-    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PBKDF2_ITERATIONS },
-    baseKey,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt'],
-  );
-
-  const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, derivedKey, secretKey);
-
-  return {
-    encryptedKey: Buffer.from(encrypted).toString('base64url'),
-    keySalt: Buffer.from(salt).toString('base64url'),
-    keyIv: Buffer.from(iv).toString('base64url'),
-  };
-}
-
-// Returns null if password is wrong — decryption will throw inside AES-GCM.
-export async function decryptSecretKey(
-  encryptedKey: string,
-  keySalt: string,
-  keyIv: string,
-  password: string,
-): Promise<Uint8Array<ArrayBuffer> | null> {
-  try {
-    const salt = Uint8Array.from(Buffer.from(keySalt, 'base64url')) as Uint8Array<ArrayBuffer>;
-    const iv = Uint8Array.from(Buffer.from(keyIv, 'base64url')) as Uint8Array<ArrayBuffer>;
-    const ciphertext = Uint8Array.from(Buffer.from(encryptedKey, 'base64url')) as Uint8Array<ArrayBuffer>;
-
-    const baseKey = await crypto.subtle.importKey(
-      'raw',
-      new TextEncoder().encode(password),
-      'PBKDF2',
-      false,
-      ['deriveKey'],
-    );
-
-    const derivedKey = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PBKDF2_ITERATIONS },
-      baseKey,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['decrypt'],
-    );
-
-    const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, derivedKey, ciphertext);
-
-    return new Uint8Array(decrypted) as Uint8Array<ArrayBuffer>;
-  } catch {
-    return null;
-  }
-}
-
+/**
+ * Persist a new user. The server never sees the password or plaintext nsec.
+ * The client generates the keypair, encrypts the secret key (PBKDF2 + AES-GCM),
+ * and POSTs the encrypted blob alongside the public key.
+ */
 export async function signup(params: {
   username: string;
-  password: string;
-  role?: 'BUYER' | 'SELLER';
-  displayName?: string;
+  displayName?: string | null;
+  role: 'BUYER' | 'SELLER';
+  npub: string;        // hex pubkey (64 chars), NOT bech32
+  encryptedKey: string; // base64url AES-GCM ciphertext
+  salt: string;         // base64url PBKDF2 salt
+  iv: string;           // base64url AES-GCM IV
 }): Promise<User> {
-  const role = params.role ?? 'BUYER';
+  const { username, displayName, role, npub, encryptedKey, salt, iv } = params;
 
-  const existing = await repository.findUserByUsername(params.username);
+  const existing = await repository.findUserByUsername(username);
   if (existing) throw new ApiError('CONFLICT', 'Username already taken', 409);
 
-  const secretKey = generateSecretKey() as Uint8Array<ArrayBuffer>;
-  const hexPubkey = getPublicKey(secretKey);
-  const npub = nip19.npubEncode(hexPubkey);
-
-  const { encryptedKey, keySalt, keyIv } = await encryptSecretKey(secretKey, params.password);
+  const existingNpub = await repository.findUserByNpub(npub);
+  if (existingNpub) throw new ApiError('CONFLICT', 'Nostr key already registered', 409);
 
   const user = await repository.createUser({
     npub,
-    username: params.username,
-    displayName: params.displayName ?? null,
+    username,
+    displayName: displayName ?? null,
     role,
-    lightningAddr: role === 'SELLER' ? `${params.username}@bitscy.com` : null,
+    lightningAddr: role === 'SELLER' ? `${username}@bitscy.com` : null,
     encryptedKey,
-    keySalt,
-    keyIv,
+    salt,
+    iv,
   });
 
   return toUser(user);
 }
 
-export async function loginWithPassword(username: string, password: string): Promise<User> {
-  const rawUser = await repository.findUserByUsername(username);
+// ============================================================================
+// Challenge generation (stateless — challenge stashed in signed cookie)
+// ============================================================================
 
-  if (!rawUser?.encryptedKey || !rawUser.keySalt || !rawUser.keyIv) {
+/** Generate a random 32-byte hex challenge. */
+export function generateChallenge(): string {
+  return randomBytes(32).toString('hex');
+}
+
+/**
+ * Return the stored encrypted blob for this username so the client can
+ * attempt local decryption. On unknown username, return a shape-identical
+ * fake response to prevent username enumeration.
+ */
+export async function getChallengeBlob(username: string): Promise<{
+  encryptedKey: string;
+  salt: string;
+  iv: string;
+  npub: string;
+} | null> {
+  const user = await repository.findUserByUsername(username);
+  if (!user || !user.encryptedKey || !user.salt || !user.iv) return null;
+
+  return {
+    encryptedKey: user.encryptedKey,
+    salt: user.salt,
+    iv: user.iv,
+    npub: user.npub,
+  };
+}
+
+// ============================================================================
+// Login with signed challenge
+// ============================================================================
+
+/**
+ * Verify that the client signed the challenge using the stored npub.
+ * The client creates a kind 27235 Nostr event with `content = challenge`
+ * and signs it with their decrypted nsec (or via NIP-07 extension).
+ *
+ * Verification:
+ *   1. event.pubkey === stored npub (hex)
+ *   2. event.content === expectedChallenge
+ *   3. verifyEvent(event) === true (Schnorr signature is valid)
+ */
+export async function loginWithSignedChallenge(params: {
+  username: string;
+  signedEvent: NostrEvent;
+  expectedChallenge: string;
+}): Promise<User> {
+  const { username, signedEvent, expectedChallenge } = params;
+
+  const user = await repository.findUserByUsername(username);
+  // Always run the same path to avoid timing leaks
+  if (!user) {
     throw new ApiError('UNAUTHORIZED', 'Invalid credentials', 401);
   }
 
-  const secretKey = await decryptSecretKey(
-    rawUser.encryptedKey,
-    rawUser.keySalt,
-    rawUser.keyIv,
-    password,
-  );
-
-  if (!secretKey) {
+  if (signedEvent.pubkey !== user.npub) {
     throw new ApiError('UNAUTHORIZED', 'Invalid credentials', 401);
   }
 
-  return toUser(rawUser);
+  if (signedEvent.content !== expectedChallenge) {
+    throw new ApiError('UNAUTHORIZED', 'Invalid credentials', 401);
+  }
+
+  if (!verifyEvent(signedEvent)) {
+    throw new ApiError('UNAUTHORIZED', 'Invalid credentials', 401);
+  }
+
+  return toUser(user);
+}
+
+// ============================================================================
+// User lookups
+// ============================================================================
+
+export async function getUserById(id: string): Promise<User | null> {
+  const user = await repository.findUserById(id);
+  if (!user) return null;
+  return toUser(user);
 }
 
 export async function getUserByUsername(username: string): Promise<User | null> {
@@ -138,53 +137,61 @@ export async function getUserByUsername(username: string): Promise<User | null> 
   return toUser(user);
 }
 
-export async function getUserById(id: string): Promise<User | null> {
-  const user = await repository.findUserById(id);
-  if (!user) return null;
-  return toUser(user);
-}
+// ============================================================================
+// Profile update
+// ============================================================================
 
+/**
+ * Update profile fields in Postgres.
+ * If a pre-signed kind 0 Nostr event is provided, verify and publish it.
+ * The server does NOT sign on the user's behalf (that's a client responsibility).
+ */
 export async function updateProfile(
   userId: string,
-  input: { displayName?: string; about?: string; avatar?: string },
-  password?: string,
+  input: {
+    displayName?: string;
+    about?: string;
+    avatar?: string;
+    location?: string;
+    lightningAddr?: string;
+  },
+  signedProfileEvent?: NostrEvent,
 ): Promise<User> {
   const rawUser = await repository.findUserById(userId);
   if (!rawUser) throw new ApiError('NOT_FOUND', 'User not found', 404);
+
+  if (signedProfileEvent) {
+    if (signedProfileEvent.pubkey !== rawUser.npub) {
+      throw new ApiError('FORBIDDEN', 'Event pubkey does not match session user', 403);
+    }
+    if (!verifyEvent(signedProfileEvent)) {
+      throw new ApiError('VALIDATION_ERROR', 'Invalid Nostr event signature', 400);
+    }
+  }
 
   const updated = await repository.updateUser(userId, {
     ...(input.displayName !== undefined && { displayName: input.displayName }),
     ...(input.about !== undefined && { about: input.about }),
     ...(input.avatar !== undefined && { avatar: input.avatar }),
+    ...(input.location !== undefined && { location: input.location }),
+    ...(input.lightningAddr !== undefined && { lightningAddr: input.lightningAddr }),
   });
 
-  // Best-effort kind 0 Nostr publish using the user's own key.
-  if (password && rawUser.encryptedKey && rawUser.keySalt && rawUser.keyIv) {
-    try {
-      const secretKey = await decryptSecretKey(
-        rawUser.encryptedKey,
-        rawUser.keySalt,
-        rawUser.keyIv,
-        password,
-      );
-      if (secretKey) {
-        const template = buildProfileEventTemplate({
-          displayName: updated.displayName,
-          about: updated.about,
-          avatar: updated.avatar,
-        });
-        const signedEvent = signEventWithKey(template, secretKey);
-        await publishEvent(signedEvent);
-      }
-    } catch (err) {
-      console.error('Profile Nostr publish failed for user', userId, err);
-    }
+  // If the client provided a pre-signed kind 0 event, publish it to relays.
+  // Best-effort — don't fail the profile update if relays are slow.
+  if (signedProfileEvent) {
+    void publishEvent(signedProfileEvent).catch((err) =>
+      console.error('[auth] Profile Nostr publish failed for user', userId, err),
+    );
   }
 
   return toUser(updated);
 }
 
-// Auth guards — synchronous, no DB call needed since role is stored in the session cookie.
+// ============================================================================
+// Auth guards
+// ============================================================================
+
 export function requireUser(session: SessionData | null): SessionData {
   if (!session) throw new ApiError('UNAUTHORIZED', 'Sign in required', 401);
   return session;
@@ -195,6 +202,10 @@ export function requireSeller(session: SessionData | null): SessionData {
   if (s.role !== 'SELLER') throw new ApiError('FORBIDDEN', 'Seller account required', 403);
   return s;
 }
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
 
 type PrismaUser = NonNullable<Awaited<ReturnType<typeof repository.findUserById>>>;
 
@@ -210,4 +221,66 @@ function toUser(u: PrismaUser): User {
     role: u.role as User['role'],
     createdAt: u.createdAt.toISOString(),
   };
+}
+
+// ============================================================================
+// Username slug derivation
+// ============================================================================
+
+const RESERVED_USERNAMES = new Set([
+  'admin', 'api', 'app', 'auth', 'bitscy', 'buyer', 'cart', 'checkout',
+  'dashboard', 'help', 'home', 'login', 'logout', 'me', 'marketplace',
+  'nostr', 'orders', 'payout', 'products', 'profile', 'search', 'sell',
+  'seller', 'settings', 'shop', 'signup', 'support', 'system', 'terms',
+  'wallet', 'www',
+]);
+
+/**
+ * Derive a URL-safe username slug from arbitrary display text.
+ * Returns the slug on success, throws ApiError on rejection.
+ */
+export function deriveUsernameSlug(rawUsername: string): string {
+  // 1. Lowercase
+  let slug = rawUsername.toLowerCase();
+  // 2. NFKD-normalize and strip combining marks
+  slug = slug.normalize('NFKD').replace(/[̀-ͯ]/g, '');
+  // 3. Replace non-alphanum runs with a single hyphen
+  slug = slug.replace(/[^a-z0-9]+/g, '-');
+  // 4. Trim leading/trailing hyphens
+  slug = slug.replace(/^-+|-+$/g, '');
+  // 5. Collapse consecutive hyphens
+  slug = slug.replace(/-{2,}/g, '-');
+
+  if (slug.length < 3) {
+    throw new ApiError('VALIDATION_ERROR', 'Username must be at least 3 characters', 400);
+  }
+  if (slug.length > 30) {
+    throw new ApiError('VALIDATION_ERROR', 'Username must be at most 30 characters', 400);
+  }
+  if (RESERVED_USERNAMES.has(slug)) {
+    throw new ApiError('VALIDATION_ERROR', `"${slug}" is a reserved name`, 400);
+  }
+
+  return slug;
+}
+
+/**
+ * Find a unique slug by appending -2, -3, ... if the base slug is taken.
+ * Throws 409 if no free slug is found up to -99.
+ */
+export async function resolveUniqueSlug(baseSlug: string): Promise<string> {
+  const base = await repository.findUserByUsername(baseSlug);
+  if (!base) return baseSlug;
+
+  for (let i = 2; i <= 99; i++) {
+    const candidate = `${baseSlug}-${i}`;
+    const existing = await repository.findUserByUsername(candidate);
+    if (!existing) return candidate;
+  }
+
+  throw new ApiError(
+    'CONFLICT',
+    'Username is taken. Please choose a different name.',
+    409,
+  );
 }
