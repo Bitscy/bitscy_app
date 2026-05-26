@@ -1,7 +1,6 @@
 'use client'
 
 import { use, useState, useEffect } from 'react'
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ChevronLeft, Copy, Check } from 'lucide-react'
 
@@ -139,7 +138,7 @@ export default function CheckoutPage({ params }: { params: Promise<{ orderId: st
   }
 
   const handlePaymentConfirmed = () => {
-    setPaymentConfirmed(true)
+    router.push(`/checkout/${orderId}/success`)
   }
 
   // Determine which steps to show
@@ -203,71 +202,6 @@ export default function CheckoutPage({ params }: { params: Promise<{ orderId: st
                   }%`,
                 }}
               ></div>
-            </div>
-          </div>
-        )}
-
-        {/* SUCCESS STATE */}
-        {paymentConfirmed && (
-          <div className="text-center py-12">
-            <div className="mb-6 flex justify-center">
-              <div className="w-16 h-16 rounded-full bg-success/10 flex items-center justify-center">
-                <Check className="w-8 h-8 text-success" strokeWidth={3} />
-              </div>
-            </div>
-            <h1 className="font-serif text-4xl mb-2">You just supported {product.artist}.</h1>
-            <p className="text-muted font-sans mb-8">Your order is on its way.</p>
-
-            <div className="bg-card rounded border border-border p-6 mb-8 text-left">
-              <div className="flex gap-4 mb-6">
-                <img
-                  src={product.thumbnail}
-                  alt={product.title}
-                  className="w-16 h-16 rounded object-cover"
-                />
-                <div className="flex-1">
-                  <p className="font-serif font-medium">{product.title}</p>
-                  <p className="text-sm text-muted">by {product.artist}</p>
-                  <p className="font-serif text-lg text-accent mt-2">₦{product.price.toLocaleString()}</p>
-                </div>
-              </div>
-
-              <div className="border-t border-border pt-4 font-sans text-sm">
-                <div className="flex justify-between mb-2">
-                  <span className="text-muted">Order ID</span>
-                  <div className="flex items-center gap-2">
-                    <code className="text-foreground">BTS-7K3M-9P2X</code>
-                    <button
-                      onClick={() => {
-                        navigator.clipboard.writeText('BTS-7K3M-9P2X')
-                        setCopied(true)
-                        setTimeout(() => setCopied(false), 2000)
-                      }}
-                      className="text-accent hover:text-primary transition-colors"
-                    >
-                      {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-                <div className="text-xs text-muted">
-                  Shipping to: {address.line1}, {address.city}
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <Link
-                href={`/buyer/orders/BTS-7K3M-9P2X`}
-                className="block w-full text-center bg-primary text-primary-foreground py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity"
-              >
-                Track your order
-              </Link>
-              <Link
-                href="/marketplace"
-                className="block w-full text-primary font-sans font-medium hover:text-primary/80 transition-colors py-3"
-              >
-                Keep browsing
-              </Link>
             </div>
           </div>
         )}
