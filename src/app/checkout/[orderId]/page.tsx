@@ -257,7 +257,7 @@ export default function CheckoutPage({ params }: { params: Promise<{ orderId: st
 
             <div className="space-y-3">
               <Link
-                href="/profile"
+                href={`/buyer/orders/BTS-7K3M-9P2X`}
                 className="block w-full text-center bg-primary text-primary-foreground py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity"
               >
                 Track your order
@@ -416,9 +416,9 @@ export default function CheckoutPage({ params }: { params: Promise<{ orderId: st
             </div>
 
             <div>
-              <h1 className="font-serif text-4xl mb-2">Almost there.</h1>
+              <h1 className="font-serif text-4xl mb-2">Create your Bitscy identity.</h1>
               <p className="text-muted font-sans">
-                Create your account to complete the purchase. We&apos;ll use this to track your order.
+                A name and a password. We never see your password — it encrypts your account on this device, and lets you come back to track this order.
               </p>
             </div>
 

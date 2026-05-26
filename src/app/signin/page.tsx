@@ -155,6 +155,17 @@ export default function SigninPage() {
                 </Link>
               </p>
 
+              {/* Buyer signup link */}
+              <p className="font-sans text-sm">
+                <span className="text-muted">Just want to buy? </span>
+                <Link
+                  href="/buyer/signup"
+                  className="text-accent hover:underline transition-colors"
+                >
+                  Sign up here
+                </Link>
+              </p>
+
               {/* Forgot Password Section */}
               <div className="space-y-3">
                 <button

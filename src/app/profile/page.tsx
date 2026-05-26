@@ -384,6 +384,14 @@ export default function ProfilePage() {
                               </button>
                             </div>
 
+                            {/* View full order */}
+                            <Link
+                              href={`/buyer/orders/${order.id}`}
+                              className="block w-full text-center bg-primary text-primary-foreground py-2.5 rounded font-sans text-sm font-medium hover:opacity-90 transition-opacity"
+                            >
+                              View full order
+                            </Link>
+
                             {/* Help Text */}
                             <p className="font-sans text-xs text-muted">
                               Need help with this order?{' '}
