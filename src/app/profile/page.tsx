@@ -1,9 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { Suspense, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { ChevronDown, ChevronUp, Copy, Settings, X } from 'lucide-react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { ChevronDown, ChevronUp, Copy, Loader2, Settings, X } from 'lucide-react'
 
 const BUYER = {
   name: 'Tobi Akinwale',
@@ -101,8 +101,17 @@ const STATUS_CONFIG: Record<string, { bg: string; text: string; label: string }>
   CANCELLED: { bg: 'bg-border', text: 'text-muted', label: 'Cancelled' },
 }
 
-export default function ProfilePage() {
+function ProfilePageContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+
+  // Design-time toggles. Real implementation derives these from SWR /
+  // fetch state on a GET /api/orders call.
+  const isLoading = searchParams.get('loading') === '1'
+  const isEmpty = searchParams.get('empty') === '1'
+  const hasError = searchParams.get('error') === '1'
+  const orders = isEmpty || hasError ? [] : ORDERS
+
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null)
   const [pwaBannerVisible, setPwaBannerVisible] = useState(true)
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -208,10 +217,62 @@ export default function ProfilePage() {
             <div className="mt-8">
               <h2 className="font-serif text-3xl font-normal mb-1">Your orders</h2>
               <p className="font-sans text-sm text-muted mb-4">
-                {ORDERS.length} order{ORDERS.length !== 1 ? 's' : ''}
+                {isLoading
+                  ? 'Loading…'
+                  : hasError
+                  ? 'Couldn\'t load your orders.'
+                  : `${orders.length} order${orders.length !== 1 ? 's' : ''}`}
               </p>
 
-              {ORDERS.length === 0 ? (
+              {isLoading ? (
+                /* LOADING SKELETON */
+                <div className="space-y-3" aria-busy="true" aria-label="Loading orders">
+                  {[0, 1, 2].map(i => (
+                    <div
+                      key={i}
+                      className="bg-white rounded-lg border border-border p-4 space-y-3"
+                    >
+                      <div className="flex justify-end">
+                        <div className="h-5 w-32 bg-input rounded-full animate-pulse" />
+                      </div>
+                      <div className="flex gap-3">
+                        <div className="w-16 h-16 rounded bg-input animate-pulse shrink-0" />
+                        <div className="flex-1 space-y-2">
+                          <div className="h-4 w-3/4 bg-input rounded animate-pulse" />
+                          <div className="h-3 w-1/2 bg-input rounded animate-pulse" />
+                          <div className="h-4 w-1/3 bg-input rounded animate-pulse" />
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between pt-2 border-t border-border/30">
+                        <div className="h-3 w-24 bg-input rounded animate-pulse" />
+                        <div className="h-3 w-16 bg-input rounded animate-pulse" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : hasError ? (
+                /* ERROR STATE */
+                <div className="py-16 flex flex-col items-center justify-center text-center">
+                  <div
+                    className="w-16 h-16 rounded-full border-2 mb-5 flex items-center justify-center"
+                    style={{ borderColor: '#B85049' }}
+                    aria-hidden="true"
+                  >
+                    <span className="text-error text-2xl">!</span>
+                  </div>
+                  <h3 className="font-serif text-2xl font-normal mb-2">Connection issue.</h3>
+                  <p className="font-sans text-base text-muted mb-6 max-w-sm">
+                    We couldn&apos;t load your orders. Check your connection and try again.
+                  </p>
+                  <Link
+                    href="/profile"
+                    className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-6 py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity"
+                  >
+                    <Loader2 className="w-4 h-4" />
+                    Try again
+                  </Link>
+                </div>
+              ) : orders.length === 0 ? (
                 /* EMPTY STATE */
                 <div className="py-20 flex flex-col items-center justify-center">
                   <div
@@ -232,7 +293,7 @@ export default function ProfilePage() {
               ) : (
                 /* ORDER ROWS */
                 <div className="space-y-3">
-                  {ORDERS.map((order) => {
+                  {orders.map((order) => {
                     const isExpanded = expandedOrder === order.id
                     const config = STATUS_CONFIG[order.status]!
 
@@ -418,5 +479,13 @@ export default function ProfilePage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function ProfilePage() {
+  return (
+    <Suspense fallback={<div className="bg-background min-h-screen" />}>
+      <ProfilePageContent />
+    </Suspense>
   )
 }

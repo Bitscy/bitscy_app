@@ -66,6 +66,11 @@ function ProductPageContent({ params }: { params: Promise<{ id: string }> }) {
   const [bannerVisible, setBannerVisible] = useState(justPublished)
   const [urlCopied, setUrlCopied] = useState(false)
 
+  // Design-time toggles for async states. Real implementation derives
+  // these from SWR / fetch isLoading + error.
+  const isLoading = searchParams.get('loading') === '1'
+  const hasError = searchParams.get('error') === '1'
+
   const shareUrl = typeof window !== 'undefined'
     ? `${window.location.origin}/products/${product.id}`
     : `bitscy.com/products/${product.id}`
@@ -115,6 +120,95 @@ function ProductPageContent({ params }: { params: Promise<{ id: string }> }) {
   }
 
   const isSoldOut = product.stock === 0
+
+  // LOADING state — skeleton of the populated page
+  if (isLoading) {
+    return (
+      <div className="bg-background min-h-screen text-foreground">
+        <div className="sticky top-0 z-40 bg-background border-b border-border">
+          <div className="px-5 py-3 flex items-center">
+            <button
+              onClick={() => router.back()}
+              className="p-3 -m-3 hover:bg-input rounded transition-colors"
+              aria-label="Go back"
+            >
+              <ChevronLeft className="w-6 h-6 text-foreground" strokeWidth={2} />
+            </button>
+          </div>
+        </div>
+        <div className="lg:flex lg:gap-12 lg:max-w-7xl lg:mx-auto lg:px-10" aria-busy="true">
+          {/* Hero skeleton */}
+          <div className="lg:w-3/5 lg:py-12">
+            <div className="aspect-square bg-input animate-pulse lg:rounded-lg" />
+            <div className="lg:hidden flex justify-center gap-2 mt-4">
+              {[0, 1, 2, 3, 4].map(i => (
+                <div key={i} className="w-2 h-2 rounded-full bg-input animate-pulse" />
+              ))}
+            </div>
+          </div>
+          {/* Content skeleton */}
+          <div className="px-6 py-8 lg:w-2/5 lg:py-12 lg:px-0 space-y-8">
+            <div className="space-y-3">
+              <div className="h-8 w-3/4 bg-input rounded animate-pulse" />
+              <div className="h-3 w-1/2 bg-input rounded animate-pulse" />
+            </div>
+            <div className="space-y-2">
+              <div className="h-10 w-40 bg-input rounded animate-pulse" />
+              <div className="h-3 w-24 bg-input rounded animate-pulse" />
+            </div>
+            <div className="h-4 w-1/3 bg-input rounded animate-pulse" />
+            <div className="h-14 bg-input rounded animate-pulse" />
+            <div className="h-px bg-input animate-pulse" />
+            <div className="space-y-3">
+              <div className="h-6 w-1/2 bg-input rounded animate-pulse" />
+              <div className="h-3 w-full bg-input rounded animate-pulse" />
+              <div className="h-3 w-full bg-input rounded animate-pulse" />
+              <div className="h-3 w-2/3 bg-input rounded animate-pulse" />
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ERROR state — couldn't load this product
+  if (hasError) {
+    return (
+      <div className="bg-background min-h-screen text-foreground">
+        <div className="sticky top-0 z-40 bg-background border-b border-border">
+          <div className="px-5 py-3 flex items-center">
+            <button
+              onClick={() => router.back()}
+              className="p-3 -m-3 hover:bg-input rounded transition-colors"
+              aria-label="Go back"
+            >
+              <ChevronLeft className="w-6 h-6 text-foreground" strokeWidth={2} />
+            </button>
+          </div>
+        </div>
+        <main className="mx-auto max-w-xl px-5 py-20 text-center">
+          <div
+            className="w-16 h-16 rounded-full border-2 mb-5 mx-auto flex items-center justify-center"
+            style={{ borderColor: '#B85049' }}
+            aria-hidden="true"
+          >
+            <span className="text-error text-2xl">!</span>
+          </div>
+          <h1 className="font-serif text-3xl font-normal mb-2">We couldn&apos;t find that.</h1>
+          <p className="font-sans text-base text-muted mb-6 max-w-sm mx-auto">
+            The piece may have been unlisted, or your connection dropped. Try going back to
+            the marketplace.
+          </p>
+          <Link
+            href="/marketplace"
+            className="inline-block bg-primary text-primary-foreground px-6 py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity"
+          >
+            Back to marketplace
+          </Link>
+        </main>
+      </div>
+    )
+  }
 
   return (
     <div className="bg-background min-h-screen text-foreground">
