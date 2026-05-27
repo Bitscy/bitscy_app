@@ -1,67 +1,85 @@
 'use client'
 
-import { Suspense, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { ChevronLeft, Plus, X, Loader2 } from 'lucide-react'
 
-interface ExistingProfile {
-  shopName: string
-  displayName: string
-  avatarUrl: string | null
-  location: string
-  about: string
-  lightningAddress: string
-}
-
-// Mock current profile state. In production this is fetched from
-// GET /api/users/me. The "incomplete" preview is triggered via ?incomplete=1.
-const FULL_PROFILE: ExistingProfile = {
-  shopName: 'Adaeze Studio',
-  displayName: 'Adaeze Okonkwo',
-  avatarUrl: null, // imagine seller has not uploaded a real avatar yet
-  location: 'Lagos, Nigeria',
-  about:
-    'Hand-woven textiles, beaded jewelry, and small ceramic forms. Made slowly, in Lagos.',
-  lightningAddress: '',
-}
-
-const BLANK_PROFILE: ExistingProfile = {
-  shopName: 'Adaeze Studio',
-  displayName: '',
-  avatarUrl: null,
-  location: '',
-  about: '',
-  lightningAddress: '',
-}
+import { ApiError } from '@/lib/api-error'
+import { updateProfile, type SignedChallengeEvent } from '@/lib/api/auth'
+import { uploadImage } from '@/lib/api/upload'
+import { signNostrEvent } from '@/lib/auth/sign'
+import { getSecretKey } from '@/lib/auth/storage'
+import { useSession } from '@/lib/auth/use-session'
+import { useSessionStore } from '@/store/session-store'
 
 function ProfilePageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  // ?incomplete=1 = the "Complete your shop" entry path from the dashboard
+  // banner. Drives copy variation only — the form behaves the same.
   const isFirstTime = searchParams.get('incomplete') === '1'
 
-  const initial = isFirstTime ? BLANK_PROFILE : FULL_PROFILE
+  const { user, isLoading: isSessionLoading } = useSession()
+  const setUser = useSessionStore(s => s.setUser)
 
-  // Form state
-  const [displayName, setDisplayName] = useState(initial.displayName)
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(initial.avatarUrl)
-  const [avatarState, setAvatarState] = useState<'empty' | 'uploading' | 'uploaded'>(
-    initial.avatarUrl ? 'uploaded' : 'empty'
-  )
-  const [location, setLocation] = useState(initial.location)
-  const [about, setAbout] = useState(initial.about)
-  const [lightningAddress, setLightningAddress] = useState(initial.lightningAddress)
+  // Auth guard.
+  useEffect(() => {
+    if (!isSessionLoading && !user) {
+      router.push('/signin')
+    }
+  }, [isSessionLoading, user, router])
+
+  // Form state — hydrated from the session user once it loads.
+  const [displayName, setDisplayName] = useState('')
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+  const [avatarState, setAvatarState] = useState<'empty' | 'uploading' | 'uploaded'>('empty')
+  const [location, setLocation] = useState('')
+  const [about, setAbout] = useState('')
+  const [lightningAddress, setLightningAddress] = useState('')
 
   const [isSaving, setIsSaving] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
-  // Avatar handlers
-  const handleAvatarAdd = () => {
-    setAvatarState('uploading')
-    setTimeout(() => {
-      // Mock upload — uses one of the existing artwork files for preview
-      setAvatarUrl('/artwork-2.jpg')
+  // Pre-fill the form from the authenticated user. Re-runs when the
+  // session store changes (e.g., after /api/auth/me hydrate completes).
+  useEffect(() => {
+    if (!user) return
+    setDisplayName(user.displayName ?? '')
+    setAbout(user.about ?? '')
+    setLightningAddress(user.lightningAddr ?? '')
+    if (user.avatar) {
+      setAvatarUrl(user.avatar)
       setAvatarState('uploaded')
-    }, 1200)
+    }
+    // `location` is in the schema but not yet on the shared User type —
+    // read it via index access so we pick it up once the type is updated.
+    const maybeLocation = (user as unknown as Record<string, unknown>).location
+    if (typeof maybeLocation === 'string') setLocation(maybeLocation)
+  }, [user])
+
+  // Avatar upload — server issues a signed Cloudinary URL, browser POSTs
+  // the file direct to Cloudinary. The file bytes never pass through us.
+  const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    // Reset the input so re-selecting the same file fires a fresh change.
+    e.target.value = ''
+    if (!file) return
+
+    setAvatarState('uploading')
+    setErrorMessage(null)
+    try {
+      const url = await uploadImage(file)
+      setAvatarUrl(url)
+      setAvatarState('uploaded')
+    } catch (err) {
+      setAvatarState(avatarUrl ? 'uploaded' : 'empty')
+      setErrorMessage(
+        err instanceof ApiError
+          ? err.message
+          : 'Upload failed. Check your connection and try again.',
+      )
+    }
   }
 
   const handleAvatarRemove = () => {
@@ -71,9 +89,72 @@ function ProfilePageContent() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSaving || !user) return
     setIsSaving(true)
-    await new Promise(r => setTimeout(r, 1000))
-    router.push('/seller')
+    setErrorMessage(null)
+
+    try {
+      // Build a signed kind 0 Nostr event so the profile mirrors to
+      // public relays. If the unlocked nsec isn't in IndexedDB (storage
+      // cleared / different device), skip the Nostr piece — Postgres
+      // still updates and the user can republish after re-auth.
+      let nostrEvent: SignedChallengeEvent | undefined
+      try {
+        const secretKey = await getSecretKey(user.npub)
+        if (secretKey) {
+          const content = JSON.stringify({
+            name: displayName || undefined,
+            about: about || undefined,
+            picture: avatarUrl || undefined,
+            lud16: lightningAddress || user.lightningAddr || undefined,
+          })
+          const signed = signNostrEvent(
+            {
+              kind: 0,
+              created_at: Math.floor(Date.now() / 1000),
+              tags: [],
+              content,
+            },
+            secretKey,
+          )
+          // VerifiedEvent is structurally a SignedChallengeEvent.
+          nostrEvent = {
+            id: signed.id,
+            pubkey: signed.pubkey,
+            created_at: signed.created_at,
+            kind: signed.kind,
+            tags: signed.tags as string[][],
+            content: signed.content,
+            sig: signed.sig,
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to sign Nostr profile event', err)
+      }
+
+      const { user: updated } = await updateProfile({
+        displayName: displayName || undefined,
+        about: about || undefined,
+        location: location || undefined,
+        avatar: avatarUrl || undefined,
+        // Personal lightningAddr stays out of this slice — it interacts
+        // with the auto-set Bitscy address and needs a dedicated UX.
+        nostrEvent,
+      })
+
+      // Refresh the session store so the dashboard reflects the new
+      // displayName immediately on navigate-back.
+      setUser(updated)
+
+      router.push('/seller')
+    } catch (err) {
+      setErrorMessage(
+        err instanceof ApiError
+          ? err.message || 'Could not save your profile. Try again.'
+          : 'Connection issue. Check your network and try again.',
+      )
+      setIsSaving(false)
+    }
   }
 
   // Copy variations by mode
@@ -116,15 +197,19 @@ function ProfilePageContent() {
 
           <div className="flex items-center gap-5">
             {avatarState === 'empty' && (
-              <button
-                type="button"
-                onClick={handleAvatarAdd}
-                className="w-24 h-24 rounded-full bg-white border border-dashed border-border flex flex-col items-center justify-center hover:bg-border/10 transition-colors shrink-0"
+              <label
+                className="w-24 h-24 rounded-full bg-white border border-dashed border-border flex flex-col items-center justify-center hover:bg-border/10 transition-colors shrink-0 cursor-pointer"
                 aria-label="Add profile photo"
               >
                 <Plus className="w-5 h-5 text-muted mb-1" />
                 <span className="text-xs text-muted">Add</span>
-              </button>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/avif"
+                  onChange={handleAvatarFileChange}
+                  className="sr-only"
+                />
+              </label>
             )}
 
             {avatarState === 'uploading' && (
@@ -230,6 +315,16 @@ function ProfilePageContent() {
 
         {/* Divider */}
         <div className="h-px bg-gold mb-8" />
+
+        {/* Inline error */}
+        {errorMessage && (
+          <p
+            role="alert"
+            className="font-sans text-sm text-error mb-4"
+          >
+            {errorMessage}
+          </p>
+        )}
 
         {/* Save / Continue */}
         <button
