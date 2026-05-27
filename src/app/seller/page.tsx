@@ -117,10 +117,12 @@ function SellerPageContent() {
     }
   }, [isSessionLoading, user, router])
 
-  // ?empty=1 renders the brand-new-seller dashboard branch (₦0 balance,
-  // 0 sales, 0 products, 0 orders). Real implementation derives this
-  // from session-state checks against actual data.
-  const isEmpty = searchParams.get('empty') === '1'
+  // Default to the brand-new-seller empty state (₦0 balance, 0 sales,
+  // 0 products, 0 orders) since the dashboard's stats / products /
+  // orders aren't wired to backend yet. Pass `?empty=0` to preview the
+  // populated mock data. When Commerce + Catalog seller-scoped endpoints
+  // land, derive this from the real data instead.
+  const isEmpty = searchParams.get('empty') !== '0'
   // Loading covers session hydration AND a ?loading=1 design-time toggle.
   // Stats / products / orders skeletons gate on this single flag.
   const isLoading = isSessionLoading || searchParams.get('loading') === '1'
@@ -130,10 +132,14 @@ function SellerPageContent() {
   const [orderStatuses, setOrderStatuses] = useState<Record<string, string>>(
     ORDERS.reduce((acc, order) => ({ ...acc, [order.id]: order.status }), {})
   )
-  // Mock: assume the seller hasn't finished their profile yet so the
-  // "Complete your shop" banner renders. Production ties this to session
-  // state (avatar + about + location all set).
-  const [profileBannerVisible, setProfileBannerVisible] = useState(true)
+  // Banner stays unless the user manually dismisses it. Session-scoped
+  // (no server-side "I dismissed this forever" persistence yet).
+  const [profileBannerDismissed, setProfileBannerDismissed] = useState(false)
+  // "Complete" matches the banner's own ask: "Add a photo and a sentence
+  // about your work" — i.e., avatar + about. Location is an optional
+  // bonus, not part of the completeness threshold.
+  const isProfileComplete = !!(user?.avatar && user?.about?.trim())
+  const profileBannerVisible = !profileBannerDismissed && !isProfileComplete
 
   // Identity values derived from the session user.
   const displayName = user?.displayName ?? user?.username ?? ''
@@ -273,7 +279,7 @@ function SellerPageContent() {
                   </Link>
                 </div>
                 <button
-                  onClick={() => setProfileBannerVisible(false)}
+                  onClick={() => setProfileBannerDismissed(true)}
                   className="text-muted hover:text-foreground transition-colors p-1 -m-1 shrink-0"
                   aria-label="Dismiss"
                 >
