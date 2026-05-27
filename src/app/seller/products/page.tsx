@@ -1,27 +1,33 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { ChevronLeft, Plus, Loader2 } from 'lucide-react'
 
-type ProductStatus = 'ACTIVE' | 'SOLD_OUT' | 'UNLISTED'
+import { ApiError } from '@/lib/api-error'
+import { deleteProduct, listProducts, updateProduct } from '@/lib/api/products'
+import { useSession } from '@/lib/auth/use-session'
+import type { Product, ProductStatus } from '@/types/shared'
 
 interface ManagedProduct {
   id: string
   title: string
   image: string
-  priceNaira: number
+  priceDisplay: string // pre-formatted "₦25,000" from the backend
   status: ProductStatus
 }
 
-const PRODUCTS_SEED: ManagedProduct[] = [
-  { id: 'beaded-collar', title: 'Beaded Statement Collar', image: '/artwork-6.jpg', priceNaira: 38000, status: 'ACTIVE' },
-  { id: 'indigo-fabric', title: 'Indigo Dyed Fabric', image: '/artwork-2.jpg', priceNaira: 25000, status: 'ACTIVE' },
-  { id: 'leather-journal', title: 'Tooled Leather Journal', image: '/artwork-5.jpg', priceNaira: 25000, status: 'ACTIVE' },
-  { id: 'geometric-abstract', title: 'Geometric Abstract Composition', image: '/artwork-1.jpg', priceNaira: 45000, status: 'ACTIVE' },
-  { id: 'thrown-vase', title: 'Hand Thrown Vase', image: '/artwork-3.jpg', priceNaira: 88000, status: 'SOLD_OUT' },
-  { id: 'adire-hanging', title: 'Adire Wall Hanging', image: '/artwork-4.jpg', priceNaira: 52000, status: 'UNLISTED' },
-]
+// Map the wire-format Product down to the shape the JSX expects.
+function toManaged(p: Product): ManagedProduct {
+  return {
+    id: p.id,
+    title: p.title,
+    image: p.images[0] ?? '',
+    priceDisplay: p.priceNgnDisplay || '₦0',
+    status: p.status,
+  }
+}
 
 const STATUS_OVERLAYS: Record<ProductStatus, { pillBg: string; pillText: string; label: string; dim: boolean } | null> = {
   ACTIVE: null,
@@ -30,24 +36,85 @@ const STATUS_OVERLAYS: Record<ProductStatus, { pillBg: string; pillText: string;
 }
 
 export default function SellerProductsPage() {
-  const [products, setProducts] = useState<ManagedProduct[]>(PRODUCTS_SEED)
+  const router = useRouter()
+  const { user, isLoading: isSessionLoading } = useSession()
+
+  // Auth guard.
+  useEffect(() => {
+    if (!isSessionLoading && (!user || user.role !== 'SELLER')) {
+      router.push('/signin')
+    }
+  }, [isSessionLoading, user, router])
+
+  const [products, setProducts] = useState<ManagedProduct[]>([])
+  const [isFetching, setIsFetching] = useState(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
   const [confirmAction, setConfirmAction] = useState<{ id: string; kind: 'unlist' | 'restore' } | null>(null)
   const [actionInProgress, setActionInProgress] = useState(false)
 
+  // Fetch the seller's full catalog (incl. unlisted) once the user loads.
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    setIsFetching(true)
+    setFetchError(null)
+    listProducts({ sellerId: user.id, pageSize: 50 })
+      .then(res => {
+        if (cancelled) return
+        setProducts(res.items.map(toManaged))
+      })
+      .catch(err => {
+        if (cancelled) return
+        setFetchError(
+          err instanceof ApiError
+            ? err.message
+            : 'Could not load your products.',
+        )
+      })
+      .finally(() => {
+        if (!cancelled) setIsFetching(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user])
+
   const handleUnlist = async (productId: string) => {
     setActionInProgress(true)
-    await new Promise(r => setTimeout(r, 800))
-    setProducts(prev => prev.map(p => p.id === productId ? { ...p, status: 'UNLISTED' } : p))
-    setConfirmAction(null)
-    setActionInProgress(false)
+    try {
+      await deleteProduct(productId)
+      setProducts(prev =>
+        prev.map(p => (p.id === productId ? { ...p, status: 'UNLISTED' } : p)),
+      )
+      setConfirmAction(null)
+    } catch (err) {
+      setFetchError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not unlist this piece. Try again.',
+      )
+    } finally {
+      setActionInProgress(false)
+    }
   }
 
   const handleRestore = async (productId: string) => {
     setActionInProgress(true)
-    await new Promise(r => setTimeout(r, 800))
-    setProducts(prev => prev.map(p => p.id === productId ? { ...p, status: 'ACTIVE' } : p))
-    setConfirmAction(null)
-    setActionInProgress(false)
+    try {
+      await updateProduct(productId, { status: 'ACTIVE' })
+      setProducts(prev =>
+        prev.map(p => (p.id === productId ? { ...p, status: 'ACTIVE' } : p)),
+      )
+      setConfirmAction(null)
+    } catch (err) {
+      setFetchError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not restore this piece. Try again.',
+      )
+    } finally {
+      setActionInProgress(false)
+    }
   }
 
   return (
@@ -71,7 +138,9 @@ export default function SellerProductsPage() {
           <div>
             <h1 className="font-serif text-4xl sm:text-5xl font-normal mb-1">Your products.</h1>
             <p className="font-sans text-sm text-muted">
-              {products.length} {products.length === 1 ? 'product' : 'products'}
+              {isFetching
+                ? 'Loading…'
+                : `${products.length} ${products.length === 1 ? 'product' : 'products'}`}
             </p>
           </div>
           <Link
@@ -83,7 +152,29 @@ export default function SellerProductsPage() {
           </Link>
         </div>
 
-        {products.length === 0 ? (
+        {fetchError && (
+          <p role="alert" className="font-sans text-sm text-error mt-4">
+            {fetchError}
+          </p>
+        )}
+
+        {isFetching ? (
+          <div
+            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 mt-8"
+            aria-busy="true"
+            aria-label="Loading your products"
+          >
+            {[0, 1, 2, 3].map(i => (
+              <div key={i} className="bg-white border border-border rounded-lg overflow-hidden">
+                <div className="aspect-square bg-input animate-pulse" />
+                <div className="p-3 space-y-2">
+                  <div className="h-3 w-3/4 bg-input rounded animate-pulse" />
+                  <div className="h-3 w-1/2 bg-input rounded animate-pulse" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : products.length === 0 ? (
           /* Empty state */
           <div className="py-20 flex flex-col items-center justify-center text-center">
             <div
@@ -141,7 +232,7 @@ export default function SellerProductsPage() {
                         {product.title}
                       </h3>
                       <p className="font-sans text-xs text-muted tabular-nums">
-                        ₦{product.priceNaira.toLocaleString('en-NG')}
+                        {product.priceDisplay}
                       </p>
                     </div>
                   </Link>

@@ -10,10 +10,12 @@ import { uploadImage } from '@/lib/api/upload'
 import { useSession } from '@/lib/auth/use-session'
 import type { ProductCategory } from '@/types/shared'
 
-// Demo exchange rate (₦ per sat). The backend recomputes priceNgnDisplay
-// from the submitted priceSats at its own configured rate, so this is
-// only the client-side input preview.
-const NGN_PER_SAT = 294
+// Demo exchange rate — must match the server's DEMO_BTC_NGN_RATE so the
+// sats we submit round-trip to the same NGN the seller typed. Server
+// default is ₦145,000,000 per BTC (1 BTC = 100,000,000 sats). If the
+// server-side rate changes, mirror it here.
+const NGN_PER_BTC = 145_000_000
+const SATS_PER_BTC = 100_000_000
 
 // UI labels paired with their API enum values. Order drives the chip row.
 const CATEGORIES: { label: string; value: ProductCategory }[] = [
@@ -57,12 +59,12 @@ export default function NewProductPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   // Calculate sats from naira at the demo rate. Backend stores priceSats
-  // verbatim and recomputes its own priceNgnDisplay.
+  // verbatim and recomputes its own priceNgnDisplay using the same rate.
   const calculateSats = (naira: string) => {
     if (!naira) return 0
     const numNaira = parseInt(naira, 10)
     if (!Number.isFinite(numNaira) || numNaira <= 0) return 0
-    return Math.round(numNaira / NGN_PER_SAT)
+    return Math.round((numNaira * SATS_PER_BTC) / NGN_PER_BTC)
   }
 
   const sats = calculateSats(price)
