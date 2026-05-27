@@ -180,6 +180,7 @@ export interface PayoutResult {
   amountSats: string;
   amountNgn: string; // computed from live CoinGecko rate at time of withdrawal
   etaSeconds: number;
+  lightningInvoice?: string; // BOLT-11 for platform wallet to pay (Bitnob withdrawal flow)
 }
 
 export interface Payout {
@@ -268,4 +269,6 @@ export type ApiErrorCode =
   | 'LIGHTNING_FAILED'
   | 'PAYOUT_FAILED'
   | 'INSUFFICIENT_BALANCE'
-  | 'OUT_OF_STOCK';
+  | 'OUT_OF_STOCK'
+  | 'BANK_ACCOUNT_IN_USE'
+  | 'ORDER_NOT_RETRYABLE';

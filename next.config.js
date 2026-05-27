@@ -32,6 +32,9 @@ const nextConfig = {
       bodySizeLimit: '5mb',
     },
   },
+  // Prevent webpack from trying to bundle the Breez SDK WASM module.
+  // It must load natively via Node.js require() on the server.
+  serverExternalPackages: ['@breeztech/breez-sdk-liquid'],
 };
 
 if (process.env.NODE_ENV === 'production') {

@@ -1,29 +1,21 @@
-import type { PayoutResult } from '@/types/shared';
-import { initiatePayout, getPayoutStatus } from './bitnob-mock';
-
-/**
- * Payout service. Public API for naira off-ramp operations.
- *
- * Routes calls to the mock for v1, real Bitnob for v2.
- * Service consumers don't know which is which.
- */
-
-const USE_REAL_BITNOB = false; // v2 flag
+import type { PayoutResult, BankAccount } from '@/types/shared';
+import { initiatePayout, getStatus } from './bitnob-client';
 
 export async function initiatePayoutRequest(
   amountSats: bigint,
   bankAccountId: string,
+  bankAccount: Pick<BankAccount, 'accountName' | 'accountNumber' | 'bankName'>,
 ): Promise<PayoutResult> {
-  if (USE_REAL_BITNOB) {
-    // TODO(v2): const { initiatePayout } = await import('./bitnob-real');
-    throw new Error('Real Bitnob not implemented yet — v2');
-  }
-  return initiatePayout(amountSats, bankAccountId);
+  const fullAccount: BankAccount = {
+    id: bankAccountId,
+    bankName: bankAccount.bankName,
+    accountNumber: bankAccount.accountNumber,
+    accountName: bankAccount.accountName,
+    isDefault: false,
+  };
+  return initiatePayout(amountSats, fullAccount);
 }
 
 export async function getPayoutStatusById(payoutId: string): Promise<PayoutResult | null> {
-  if (USE_REAL_BITNOB) {
-    throw new Error('Real Bitnob not implemented yet — v2');
-  }
-  return getPayoutStatus(payoutId);
+  return getStatus(payoutId);
 }
