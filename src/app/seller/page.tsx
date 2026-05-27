@@ -6,9 +6,27 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Plus } from 'lucide-react'
 
 import { logout } from '@/lib/api/auth'
+import { listProducts } from '@/lib/api/products'
 import { useSession } from '@/lib/auth/use-session'
 import { clearSecretKey } from '@/lib/auth/storage'
 import { useSessionStore } from '@/store/session-store'
+import type { Product } from '@/types/shared'
+
+interface DashboardProduct {
+  id: string
+  title: string
+  image: string
+  priceDisplay: string // pre-formatted "₦25,000" from the backend
+}
+
+function toDashboardProduct(p: Product): DashboardProduct {
+  return {
+    id: p.id,
+    title: p.title,
+    image: p.images[0] ?? '',
+    priceDisplay: p.priceNgnDisplay || '₦0',
+  }
+}
 
 // SELLER identity is now derived from the session — see useSession() below.
 // STATS / PRODUCTS / ORDERS remain as mock data until the matching Commerce
@@ -132,6 +150,40 @@ function SellerPageContent() {
   const [orderStatuses, setOrderStatuses] = useState<Record<string, string>>(
     ORDERS.reduce((acc, order) => ({ ...acc, [order.id]: order.status }), {})
   )
+
+  // Seller's product catalog — capped at 4 for the dashboard preview;
+  // total count comes from the API response so "N products listed" stays
+  // accurate even when the grid is truncated.
+  const [fetchedProducts, setFetchedProducts] = useState<DashboardProduct[]>([])
+  const [productTotal, setProductTotal] = useState(0)
+  const [isProductsLoading, setIsProductsLoading] = useState(true)
+
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    setIsProductsLoading(true)
+    listProducts({ sellerId: user.id, pageSize: 4 })
+      .then(res => {
+        if (cancelled) return
+        setFetchedProducts(res.items.map(toDashboardProduct))
+        setProductTotal(res.total)
+      })
+      .catch(err => {
+        if (cancelled) return
+        // Soft failure: keep the empty state, log for diagnosis. No user-
+        // facing error pill on the dashboard since the rest of the page
+        // still renders.
+        console.warn('Failed to load seller products', err)
+        setFetchedProducts([])
+        setProductTotal(0)
+      })
+      .finally(() => {
+        if (!cancelled) setIsProductsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user])
   // Banner stays unless the user manually dismisses it. Session-scoped
   // (no server-side "I dismissed this forever" persistence yet).
   const [profileBannerDismissed, setProfileBannerDismissed] = useState(false)
@@ -150,13 +202,15 @@ function SellerPageContent() {
     ? new Date(user.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
     : ''
 
-  // Empty-state derived values
+  // Empty-state derived values (balance / sales / orders are still mock,
+  // gated by `isEmpty` until the Commerce endpoints land).
   const balance = isEmpty ? 0 : STATS.availableBalance
   const balanceSats = isEmpty ? 0 : STATS.sats
   const totalSales = isEmpty ? 0 : STATS.totalSales
   const totalEarned = isEmpty ? 0 : STATS.totalEarned
   const orders = isEmpty ? [] : ORDERS
-  const products = isEmpty ? [] : PRODUCTS
+  // Products now come from the API directly — no isEmpty gating.
+  const products = fetchedProducts
 
   const handleCopyShopUrl = () => {
     if (!shopUrl) return
@@ -238,7 +292,7 @@ function SellerPageContent() {
                 {displayName}
               </h1>
               <p className="font-sans text-sm sm:text-base text-muted mb-4">
-                {totalSales} sales · {products.length} products listed
+                {totalSales} sales · {productTotal} products listed
                 {memberSince && ` · Member since ${memberSince}`}
               </p>
 
@@ -535,7 +589,7 @@ function SellerPageContent() {
                 </Link>
               </div>
 
-              {isLoading ? (
+              {isLoading || isProductsLoading ? (
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
                   {[0, 1, 2, 3].map(i => (
                     <div key={i} aria-busy="true">
@@ -578,7 +632,7 @@ function SellerPageContent() {
                         {product.title}
                       </h3>
                       <p className="font-sans text-xs text-muted tabular-nums">
-                        ₦{product.price.toLocaleString('en-NG')}
+                        {product.priceDisplay}
                       </p>
                     </Link>
                   ))}
@@ -591,7 +645,7 @@ function SellerPageContent() {
                     href="/seller/products"
                     className="font-sans text-sm text-accent hover:opacity-80 transition-opacity"
                   >
-                    See all {products.length} products
+                    See all {productTotal} {productTotal === 1 ? 'product' : 'products'}
                   </Link>
                 </div>
               )}

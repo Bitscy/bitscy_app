@@ -1,39 +1,49 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ChevronLeft, Plus, X, Loader2 } from 'lucide-react'
 
-const EXCHANGE_RATE = 294 // ₦/sat
+import { ApiError } from '@/lib/api-error'
+import { createProduct } from '@/lib/api/products'
+import { uploadImage } from '@/lib/api/upload'
+import { useSession } from '@/lib/auth/use-session'
+import type { ProductCategory } from '@/types/shared'
 
-const CATEGORIES = [
-  'Paintings',
-  'Jewelry',
-  'Textiles',
-  'Leather',
-  'Pottery',
-  'Sculpture',
-  'Prints & Digital',
-  'Other',
-]
+// Demo exchange rate — must match the server's DEMO_BTC_NGN_RATE so the
+// sats we submit round-trip to the same NGN the seller typed. Server
+// default is ₦145,000,000 per BTC (1 BTC = 100,000,000 sats). If the
+// server-side rate changes, mirror it here.
+const NGN_PER_BTC = 145_000_000
+const SATS_PER_BTC = 100_000_000
 
-// Local artwork placeholders used while previewing the upload flow.
-// Real uploads will go to Cloudinary when the catalog endpoint is wired.
-const MOCK_PHOTO_URLS = [
-  '/artwork-2.jpg',
-  '/artwork-2.jpg',
-  '/artwork-2.jpg',
-  '/artwork-2.jpg',
-  '/artwork-2.jpg',
+// UI labels paired with their API enum values. Order drives the chip row.
+const CATEGORIES: { label: string; value: ProductCategory }[] = [
+  { label: 'Paintings', value: 'paintings' },
+  { label: 'Jewelry', value: 'jewelry' },
+  { label: 'Textiles', value: 'textiles' },
+  { label: 'Leather', value: 'leather' },
+  { label: 'Pottery', value: 'pottery' },
+  { label: 'Sculpture', value: 'sculpture' },
+  { label: 'Prints & Digital', value: 'prints_digital' },
+  { label: 'Other', value: 'other' },
 ]
 
 export default function NewProductPage() {
   const router = useRouter()
+  const { user, isLoading: isSessionLoading } = useSession()
+
+  // Auth guard — only authenticated sellers can list products.
+  useEffect(() => {
+    if (!isSessionLoading && (!user || user.role !== 'SELLER')) {
+      router.push('/signin')
+    }
+  }, [isSessionLoading, user, router])
 
   // Form state
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [selectedCategory, setSelectedCategory] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState<ProductCategory | ''>('')
   const [price, setPrice] = useState('')
   const [shipping, setShipping] = useState('')
   const [stock, setStock] = useState('1')
@@ -46,46 +56,78 @@ export default function NewProductPage() {
   // Form validation & submission states
   const [showValidationErrors, setShowValidationErrors] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
-  // Calculate sats from naira
+  // Calculate sats from naira at the demo rate. Backend stores priceSats
+  // verbatim and recomputes its own priceNgnDisplay using the same rate.
   const calculateSats = (naira: string) => {
     if (!naira) return 0
     const numNaira = parseInt(naira, 10)
-    return Math.round(numNaira / EXCHANGE_RATE)
+    if (!Number.isFinite(numNaira) || numNaira <= 0) return 0
+    return Math.round((numNaira * SATS_PER_BTC) / NGN_PER_BTC)
   }
 
   const sats = calculateSats(price)
+  const shippingSats = calculateSats(shipping)
 
   // Validation
   const hasAtLeastOnePhoto = photoStates.some(state => state === 'uploaded')
-  const isTitleValid = title.trim().length > 0
-  const isDescriptionValid = description.trim().length > 0
+  const anyPhotoUploading = photoStates.some(state => state === 'uploading')
+  const isTitleValid = title.trim().length >= 2 && title.trim().length <= 100
+  const isDescriptionValid = description.trim().length >= 10 && description.trim().length <= 2000
   const isCategorySelected = selectedCategory !== ''
-  const isPriceValid = parseInt(price || '0', 10) > 0
-  const isFormValid = hasAtLeastOnePhoto && isTitleValid && isDescriptionValid && isCategorySelected && isPriceValid
+  const isPriceValid = parseInt(price || '0', 10) > 0 && sats > 0
+  const parsedStock = Math.max(1, parseInt(stock || '1', 10) || 1)
+  const isFormValid =
+    hasAtLeastOnePhoto &&
+    !anyPhotoUploading &&
+    isTitleValid &&
+    isDescriptionValid &&
+    isCategorySelected &&
+    isPriceValid
 
-  // Photo handlers
-  const handlePhotoAdd = (index: number) => {
+  // Real photo upload: server issues signed Cloudinary params, browser
+  // POSTs the file direct to Cloudinary. File bytes never touch our server.
+  const handlePhotoFileChange = async (
+    index: number,
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0]
+    // Reset so re-selecting the same file fires another change event.
+    e.target.value = ''
+    if (!file) return
+
     setPhotoStates(prev => {
       const next = [...prev]
       next[index] = 'uploading'
       return next
     })
+    setErrorMessage(null)
 
-    // Simulate upload
-    setTimeout(() => {
+    try {
+      const url = await uploadImage(file)
+      setPhotoUrls(prev => {
+        const next = [...prev]
+        next[index] = url
+        return next
+      })
       setPhotoStates(prev => {
         const next = [...prev]
         next[index] = 'uploaded'
         return next
       })
-
-      setPhotoUrls(prev => {
+    } catch (err) {
+      setPhotoStates(prev => {
         const next = [...prev]
-        next[index] = MOCK_PHOTO_URLS[index] ?? null
+        next[index] = 'error'
         return next
       })
-    }, 1500)
+      // Surface the most actionable message (validation failures from
+      // the Cloudinary helper carry a useful reason).
+      if (err instanceof ApiError) {
+        setErrorMessage(err.message)
+      }
+    }
   }
 
   const handlePhotoRemove = (index: number) => {
@@ -101,10 +143,6 @@ export default function NewProductPage() {
     })
   }
 
-  const handleRetryPhoto = (index: number) => {
-    handlePhotoAdd(index)
-  }
-
   const handlePublish = async (e: React.FormEvent) => {
     e.preventDefault()
 
@@ -112,10 +150,40 @@ export default function NewProductPage() {
       setShowValidationErrors(true)
       return
     }
+    if (isSubmitting) return
 
     setIsSubmitting(true)
-    await new Promise(resolve => setTimeout(resolve, 1500))
-    router.push('/products/indigo-fabric?justPublished=1')
+    setErrorMessage(null)
+
+    try {
+      const images = photoUrls.filter((url): url is string => !!url)
+      // Append dimensions (if provided) to the description rather than as
+      // its own field — the API doesn't model dimensions separately. Keeps
+      // the info searchable in the product detail page.
+      const fullDescription = dimensions.trim()
+        ? `${description.trim()}\n\nDimensions: ${dimensions.trim()}`
+        : description.trim()
+
+      const { product } = await createProduct({
+        title: title.trim(),
+        description: fullDescription,
+        priceSats: String(sats),
+        shippingSats: String(shippingSats),
+        category: selectedCategory as ProductCategory,
+        images,
+        isDigital: false,
+        stock: parsedStock,
+      })
+
+      router.push(`/products/${product.id}?justPublished=1`)
+    } catch (err) {
+      setErrorMessage(
+        err instanceof ApiError
+          ? err.message || 'Could not publish your piece. Try again.'
+          : 'Connection issue. Check your network and try again.',
+      )
+      setIsSubmitting(false)
+    }
   }
 
   return (
@@ -158,14 +226,16 @@ export default function NewProductPage() {
 
                 {/* Empty slot */}
                 {state === 'empty' && (
-                  <button
-                    type="button"
-                    onClick={() => handlePhotoAdd(index)}
-                    className="w-full aspect-square bg-white border border-dashed border-border rounded-lg flex flex-col items-center justify-center hover:bg-border/10 transition-colors"
-                  >
+                  <label className="w-full aspect-square bg-white border border-dashed border-border rounded-lg flex flex-col items-center justify-center hover:bg-border/10 transition-colors cursor-pointer">
                     <Plus className="w-6 h-6 text-muted mb-2" />
                     <span className="text-xs text-muted">Add photo</span>
-                  </button>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/avif"
+                      onChange={(e) => handlePhotoFileChange(index, e)}
+                      className="sr-only"
+                    />
+                  </label>
                 )}
 
                 {/* Uploading state */}
@@ -195,17 +265,19 @@ export default function NewProductPage() {
                   </div>
                 )}
 
-                {/* Error state */}
+                {/* Error state — clicking opens the file picker again. */}
                 {state === 'error' && (
-                  <button
-                    type="button"
-                    onClick={() => handleRetryPhoto(index)}
-                    className="w-full aspect-square bg-error/10 border border-error rounded-lg flex flex-col items-center justify-center hover:bg-error/20 transition-colors cursor-pointer"
-                  >
+                  <label className="w-full aspect-square bg-error/10 border border-error rounded-lg flex flex-col items-center justify-center hover:bg-error/20 transition-colors cursor-pointer">
                     <span className="text-xs text-error text-center px-2">
                       Couldn&apos;t upload. Tap to retry.
                     </span>
-                  </button>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/avif"
+                      onChange={(e) => handlePhotoFileChange(index, e)}
+                      className="sr-only"
+                    />
+                  </label>
                 )}
               </div>
             ))}
@@ -256,17 +328,17 @@ export default function NewProductPage() {
           <div className="flex flex-wrap gap-3 mb-3">
             {CATEGORIES.map(cat => (
               <button
-                key={cat}
+                key={cat.value}
                 type="button"
-                onClick={() => setSelectedCategory(cat)}
+                onClick={() => setSelectedCategory(cat.value)}
                 className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
-                  selectedCategory === cat
+                  selectedCategory === cat.value
                     ? 'bg-primary text-primary-foreground border-0'
                     : 'bg-white border border-border text-foreground hover:border-primary'
                 }`}
                 style={{ minHeight: '32px' }}
               >
-                {cat}
+                {cat.label}
               </button>
             ))}
           </div>
@@ -343,6 +415,13 @@ export default function NewProductPage() {
 
         {/* Divider */}
         <div className="h-px bg-gold mb-8" />
+
+        {/* Inline error (network / server failures during publish or upload) */}
+        {errorMessage && (
+          <p role="alert" className="font-sans text-sm text-error mb-4">
+            {errorMessage}
+          </p>
+        )}
 
         {/* 8. PUBLISH BUTTON */}
         <button
