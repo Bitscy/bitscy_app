@@ -1,16 +1,28 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Plus } from 'lucide-react'
 
 import { logout } from '@/lib/api/auth'
+import {
+  getWalletBalance,
+  listOrders,
+  markOrderShipped,
+  type WalletBalance,
+} from '@/lib/api/commerce'
 import { listProducts } from '@/lib/api/products'
 import { useSession } from '@/lib/auth/use-session'
 import { clearSecretKey } from '@/lib/auth/storage'
 import { useSessionStore } from '@/store/session-store'
-import type { Product } from '@/types/shared'
+import type { Order, OrderStatus, Product } from '@/types/shared'
+
+// Mirror the server's demo BTC/NGN rate for client-side sats → ₦ conversions
+// (order totals, total-earned aggregate). Kept in sync with the rest of the
+// app — see NGN_PER_BTC in /seller/products/new and /products/[id].
+const NGN_PER_BTC = 145_000_000n
+const SATS_PER_BTC = 100_000_000n
 
 interface DashboardProduct {
   id: string
@@ -28,98 +40,70 @@ function toDashboardProduct(p: Product): DashboardProduct {
   }
 }
 
-// SELLER identity is now derived from the session — see useSession() below.
-// STATS / PRODUCTS / ORDERS remain as mock data until the matching Commerce
-// (balance, sales) and Catalog (seller products, orders) endpoints land.
-
-const STATS = {
-  availableBalance: 127500,
-  sats: 425000,
-  totalSales: 8,
-  totalEarned: 487000,
-}
-
-const PRODUCTS = [
-  {
-    id: 1,
-    title: 'Indigo Dyed Fabric',
-    price: 25000,
-    image: '/artwork-2.jpg',
-  },
-  {
-    id: 2,
-    title: 'Beaded Statement Collar',
-    price: 38000,
-    image: '/artwork-6.jpg',
-  },
-  {
-    id: 3,
-    title: 'Hand Thrown Vase',
-    price: 88000,
-    image: '/artwork-3.jpg',
-  },
-  {
-    id: 4,
-    title: 'Tooled Leather Journal',
-    price: 25000,
-    image: '/artwork-5.jpg',
-  },
-]
-
-interface SellerOrder {
+// Recent-orders viewmodel — adapts the wire-format Order to what the
+// dashboard JSX consumes (single-item display, formatted totals, etc.).
+interface SellerOrderVm {
   id: string
-  product: string
-  buyer: string
-  total: number
-  paidRelative: string
+  product: string         // first item's title; quantity > 1 is rare in v1
+  buyer: string           // pseudonymous label like "Buyer · abc1"
+  totalDisplay: string    // "₦25,000"
+  paidRelative: string    // "6h ago"
   shippedRelative?: string
   deliveredRelative?: string
-  status: 'PAID' | 'SHIPPED' | 'DELIVERED' | 'CANCELLED'
+  status: OrderStatus
 }
 
-const ORDERS: SellerOrder[] = [
-  {
-    id: 'BTS-2H8K-5L9M',
-    product: 'Beaded Statement Collar',
-    buyer: 'K. M.',
-    total: 41000,
-    paidRelative: '6 hours ago',
-    status: 'PAID',
-  },
-  {
-    id: 'BTS-7K3M-9P2X',
-    product: 'Indigo Dyed Fabric',
-    buyer: 'T. A.',
-    total: 28000,
-    paidRelative: '2 days ago',
-    status: 'PAID',
-  },
-  {
-    id: 'BTS-4F5R-1Q8Y',
-    product: 'Geometric Abstract Composition',
-    buyer: 'N. O.',
-    total: 48500,
-    paidRelative: '5 days ago',
-    shippedRelative: '4 days ago',
-    status: 'SHIPPED',
-  },
-  {
-    id: 'BTS-9X2P-5T6Q',
-    product: 'Hand Thrown Vase',
-    buyer: 'F. H.',
-    total: 91000,
-    paidRelative: '2 weeks ago',
-    shippedRelative: '12 days ago',
-    deliveredRelative: '3 days ago',
-    status: 'DELIVERED',
-  },
-]
+function satsToNairaNumber(satsStr: string): number {
+  try {
+    const sats = BigInt(satsStr)
+    const ngn = (sats * NGN_PER_BTC) / SATS_PER_BTC
+    return Number(ngn)
+  } catch {
+    return 0
+  }
+}
+
+function formatNgn(n: number): string {
+  return `₦${n.toLocaleString('en-NG')}`
+}
+
+function relativeTime(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const ms = Date.now() - new Date(iso).getTime()
+  if (ms < 0 || Number.isNaN(ms)) return ''
+  const mins = Math.floor(ms / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  const weeks = Math.floor(days / 7)
+  if (weeks < 5) return `${weeks}w ago`
+  return new Date(iso).toLocaleDateString()
+}
+
+function toSellerOrderVm(o: Order): SellerOrderVm {
+  const firstItem = o.items[0]
+  return {
+    id: o.id,
+    product: firstItem?.productTitle ?? '(item)',
+    // Buyer is pseudonymous to the seller. Last 4 chars of npub gives a
+    // stable, distinguishable handle per buyer without leaking identity.
+    buyer: `Buyer · ${o.buyerNpub.slice(-4)}`,
+    totalDisplay: formatNgn(satsToNairaNumber(o.totalSats)),
+    paidRelative: relativeTime(o.paidAt),
+    shippedRelative: o.shippedAt ? relativeTime(o.shippedAt) : undefined,
+    status: o.status,
+  }
+}
 
 const STATUS_CONFIG: Record<string, { bg: string; text: string; label: string }> = {
   PAID: { bg: 'bg-primary', text: 'text-primary-foreground', label: 'New sale · Ready to ship' },
   SHIPPED: { bg: 'bg-gold', text: 'text-foreground', label: 'Shipped' },
   DELIVERED: { bg: 'bg-success', text: 'text-primary-foreground', label: 'Delivered' },
   CANCELLED: { bg: 'bg-border', text: 'text-muted', label: 'Cancelled' },
+  PENDING: { bg: 'bg-input', text: 'text-muted', label: 'Awaiting payment' },
 }
 
 function SellerPageContent() {
@@ -135,21 +119,17 @@ function SellerPageContent() {
     }
   }, [isSessionLoading, user, router])
 
-  // Default to the brand-new-seller empty state (₦0 balance, 0 sales,
-  // 0 products, 0 orders) since the dashboard's stats / products /
-  // orders aren't wired to backend yet. Pass `?empty=0` to preview the
-  // populated mock data. When Commerce + Catalog seller-scoped endpoints
-  // land, derive this from the real data instead.
-  const isEmpty = searchParams.get('empty') !== '0'
   // Loading covers session hydration AND a ?loading=1 design-time toggle.
-  // Stats / products / orders skeletons gate on this single flag.
+  // Wallet / orders / products skeletons gate on this single flag plus
+  // their own fetch states below.
   const isLoading = isSessionLoading || searchParams.get('loading') === '1'
 
   const [copiedText, setCopiedText] = useState<string | null>(null)
   const [shippingConfirm, setShippingConfirm] = useState<string | null>(null)
-  const [orderStatuses, setOrderStatuses] = useState<Record<string, string>>(
-    ORDERS.reduce((acc, order) => ({ ...acc, [order.id]: order.status }), {})
-  )
+  // Tracks optimistic status flips for the in-page "Mark as shipped"
+  // quick-action. Populated from fetched orders below.
+  const [orderStatuses, setOrderStatuses] = useState<Record<string, OrderStatus>>({})
+  const [shipError, setShipError] = useState<string | null>(null)
 
   // Seller's product catalog — capped at 4 for the dashboard preview;
   // total count comes from the API response so "N products listed" stays
@@ -157,6 +137,14 @@ function SellerPageContent() {
   const [fetchedProducts, setFetchedProducts] = useState<DashboardProduct[]>([])
   const [productTotal, setProductTotal] = useState(0)
   const [isProductsLoading, setIsProductsLoading] = useState(true)
+
+  // Wallet balance from GET /api/wallet/balance.
+  const [wallet, setWallet] = useState<WalletBalance | null>(null)
+  const [isWalletLoading, setIsWalletLoading] = useState(true)
+
+  // Orders from GET /api/orders (seller's sales).
+  const [fetchedOrders, setFetchedOrders] = useState<Order[]>([])
+  const [isOrdersLoading, setIsOrdersLoading] = useState(true)
 
   useEffect(() => {
     if (!user) return
@@ -184,6 +172,61 @@ function SellerPageContent() {
       cancelled = true
     }
   }, [user])
+
+  // Wallet balance — sellers only. Endpoint 403s for buyers; we don't
+  // surface that since the auth guard already redirects non-sellers.
+  useEffect(() => {
+    if (!user || user.role !== 'SELLER') return
+    let cancelled = false
+    setIsWalletLoading(true)
+    getWalletBalance()
+      .then(res => {
+        if (!cancelled) setWallet(res)
+      })
+      .catch(err => {
+        if (cancelled) return
+        console.warn('Failed to load wallet balance', err)
+        setWallet(null)
+      })
+      .finally(() => {
+        if (!cancelled) setIsWalletLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user])
+
+  // Orders — pull a wide page so totalSales / totalEarned can aggregate
+  // accurately for any seller with <50 lifetime sales (true on demo day).
+  // High-volume sellers would need a dedicated aggregate endpoint.
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    setIsOrdersLoading(true)
+    listOrders({ pageSize: 50 })
+      .then(res => {
+        if (cancelled) return
+        setFetchedOrders(res.items)
+        setOrderStatuses(
+          res.items.reduce<Record<string, OrderStatus>>((acc, o) => {
+            acc[o.id] = o.status
+            return acc
+          }, {}),
+        )
+      })
+      .catch(err => {
+        if (cancelled) return
+        console.warn('Failed to load orders', err)
+        setFetchedOrders([])
+        setOrderStatuses({})
+      })
+      .finally(() => {
+        if (!cancelled) setIsOrdersLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user])
   // Banner stays unless the user manually dismisses it. Session-scoped
   // (no server-side "I dismissed this forever" persistence yet).
   const [profileBannerDismissed, setProfileBannerDismissed] = useState(false)
@@ -202,14 +245,55 @@ function SellerPageContent() {
     ? new Date(user.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
     : ''
 
-  // Empty-state derived values (balance / sales / orders are still mock,
-  // gated by `isEmpty` until the Commerce endpoints land).
-  const balance = isEmpty ? 0 : STATS.availableBalance
-  const balanceSats = isEmpty ? 0 : STATS.sats
-  const totalSales = isEmpty ? 0 : STATS.totalSales
-  const totalEarned = isEmpty ? 0 : STATS.totalEarned
-  const orders = isEmpty ? [] : ORDERS
-  // Products now come from the API directly — no isEmpty gating.
+  // Wallet display values. balanceNgn is pre-formatted ("₦12,345") so we
+  // render it directly; balanceSats is a bigint-string that we just
+  // number-format for the secondary line.
+  const balanceNgnDisplay = wallet?.balanceNgn ?? '₦0'
+  const balanceSatsDisplay = (() => {
+    try {
+      return Number(BigInt(wallet?.balanceSats ?? '0')).toLocaleString('en-NG')
+    } catch {
+      return '0'
+    }
+  })()
+  // 0 balance state still drives the disabled-withdraw branch in the JSX.
+  const hasBalance = (() => {
+    try {
+      return BigInt(wallet?.balanceSats ?? '0') > 0n
+    } catch {
+      return false
+    }
+  })()
+
+  // Aggregate stats from the fetched orders. Lifetime-accurate when the
+  // seller has ≤50 orders; truncated above that until we add a dedicated
+  // /api/seller/stats endpoint.
+  const completedOrders = useMemo(
+    () =>
+      fetchedOrders.filter(o => {
+        const status = orderStatuses[o.id] ?? o.status
+        return status === 'PAID' || status === 'SHIPPED' || status === 'DELIVERED'
+      }),
+    [fetchedOrders, orderStatuses],
+  )
+  const totalSales = completedOrders.length
+  const totalEarned = useMemo(
+    () => completedOrders.reduce((sum, o) => sum + satsToNairaNumber(o.totalSats), 0),
+    [completedOrders],
+  )
+
+  // Recent orders for the right-hand panel. Cap at 5; "See all" goes to
+  // /seller/orders for the full history.
+  const orders = useMemo<SellerOrderVm[]>(
+    () =>
+      fetchedOrders
+        .filter(o => (orderStatuses[o.id] ?? o.status) !== 'PENDING')
+        .slice(0, 5)
+        .map(toSellerOrderVm),
+    [fetchedOrders, orderStatuses],
+  )
+
+  // Products come from the API directly.
   const products = fetchedProducts
 
   const handleCopyShopUrl = () => {
@@ -219,9 +303,20 @@ function SellerPageContent() {
     setTimeout(() => setCopiedText(null), 2000)
   }
 
-  const handleMarkAsShipped = (orderId: string) => {
+  const handleMarkAsShipped = async (orderId: string) => {
+    // Optimistic flip. If the server rejects, roll back and surface a
+    // brief banner so the seller knows it didn't go through.
+    const previous = orderStatuses[orderId] ?? 'PAID'
     setOrderStatuses(prev => ({ ...prev, [orderId]: 'SHIPPED' }))
     setShippingConfirm(null)
+    setShipError(null)
+    try {
+      await markOrderShipped(orderId)
+    } catch (err) {
+      console.warn('Mark as shipped failed', err)
+      setOrderStatuses(prev => ({ ...prev, [orderId]: previous }))
+      setShipError('Could not mark this order as shipped. Try again.')
+    }
   }
 
   const handleSignOut = async () => {
@@ -348,7 +443,7 @@ function SellerPageContent() {
               <div className="lg:col-span-2 space-y-6">
                 {/* BALANCE CARD */}
                 <div className="bg-card border border-border rounded-lg p-6">
-                  {isLoading ? (
+                  {isLoading || isWalletLoading ? (
                     <div aria-busy="true" aria-label="Loading balance">
                       <div className="h-3 w-32 bg-input rounded mb-4 animate-pulse" />
                       <div className="h-14 w-56 bg-input rounded mb-2 animate-pulse" />
@@ -363,16 +458,17 @@ function SellerPageContent() {
                       </p>
                       <div className="mb-1">
                         <p className={`font-serif text-5xl sm:text-6xl font-normal tabular-nums ${
-                          balance === 0 ? 'text-muted' : 'text-foreground'
+                          hasBalance ? 'text-foreground' : 'text-muted'
                         }`}>
-                          ₦{balance.toLocaleString('en-NG')}
+                          {balanceNgnDisplay}
                         </p>
                       </div>
                       <p className="font-sans text-sm text-muted mb-1 tabular-nums">
-                        ≈ {balanceSats.toLocaleString('en-NG')} sats
+                        ≈ {balanceSatsDisplay} sats
                       </p>
                       <p className="font-sans text-xs text-muted mb-2">
-                        Updated just now ·{' '}
+                        {wallet?.rateStale ? 'Rate may be stale' : 'Updated just now'}
+                        {' · '}
                         <Link
                           href="/seller/withdraw/history"
                           className="text-accent hover:opacity-80 transition-opacity"
@@ -389,7 +485,7 @@ function SellerPageContent() {
                           Learn more →
                         </Link>
                       </p>
-                      {balance === 0 ? (
+                      {!hasBalance ? (
                         <button
                           type="button"
                           disabled
@@ -411,7 +507,7 @@ function SellerPageContent() {
 
                 {/* STATS ROW */}
                 <div className="grid grid-cols-2 gap-4">
-                  {isLoading ? (
+                  {isLoading || isOrdersLoading ? (
                     <>
                       {[0, 1].map(i => (
                         <div key={i} className="bg-card border border-border rounded-lg p-4" aria-busy="true">
@@ -459,8 +555,13 @@ function SellerPageContent() {
                   </Link>
                 </div>
 
+                {shipError && (
+                  <p role="alert" className="font-sans text-sm text-error mb-3">
+                    {shipError}
+                  </p>
+                )}
                 <div className="space-y-3">
-                  {isLoading &&
+                  {(isLoading || isOrdersLoading) &&
                     [0, 1, 2].map(i => (
                       <div
                         key={i}
@@ -476,7 +577,7 @@ function SellerPageContent() {
                         <div className="h-4 w-1/3 bg-input rounded animate-pulse" />
                       </div>
                     ))}
-                  {!isLoading && orders.length === 0 && (
+                  {!isLoading && !isOrdersLoading && orders.length === 0 && (
                     <div className="bg-card border border-border rounded-lg p-6 text-center">
                       <div
                         className="w-12 h-12 rounded-full border-2 mx-auto mb-4"
@@ -496,9 +597,9 @@ function SellerPageContent() {
                       </button>
                     </div>
                   )}
-                  {!isLoading && orders.map(order => {
-                    const status = orderStatuses[order.id]!
-                    const config = STATUS_CONFIG[status]!
+                  {!isLoading && !isOrdersLoading && orders.map(order => {
+                    const status = orderStatuses[order.id] ?? order.status
+                    const config = STATUS_CONFIG[status] ?? STATUS_CONFIG.PENDING!
 
                     return (
                       <div key={order.id} className="bg-card border border-border rounded-lg overflow-hidden">
@@ -525,7 +626,7 @@ function SellerPageContent() {
                               Sold to {order.buyer}
                             </p>
                             <p className="font-sans text-sm text-foreground tabular-nums">
-                              ₦{order.total.toLocaleString('en-NG')}
+                              {order.totalDisplay}
                             </p>
                           </div>
 
