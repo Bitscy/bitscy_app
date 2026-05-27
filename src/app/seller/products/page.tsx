@@ -273,13 +273,21 @@ export default function SellerProductsPage() {
                       </div>
                     </div>
                   ) : (
-                    /* Inline action button */
-                    <div className="border-t border-border px-3 py-2">
+                    /* Inline action row — "View" jumps to the public
+                       detail page; Unlist/Restore is the destructive /
+                       restorative action. Tap card body for edit. */
+                    <div className="border-t border-border px-3 py-2 flex items-center justify-between gap-2">
+                      <Link
+                        href={`/products/${product.id}`}
+                        className="text-accent font-sans text-xs font-medium hover:opacity-80 transition-opacity py-1.5"
+                      >
+                        View
+                      </Link>
                       {isUnlisted ? (
                         <button
                           type="button"
                           onClick={() => setConfirmAction({ id: product.id, kind: 'restore' })}
-                          className="w-full text-accent font-sans text-xs font-medium hover:opacity-80 transition-opacity py-1.5"
+                          className="text-accent font-sans text-xs font-medium hover:opacity-80 transition-opacity py-1.5"
                         >
                           Restore listing
                         </button>
@@ -287,7 +295,7 @@ export default function SellerProductsPage() {
                         <button
                           type="button"
                           onClick={() => setConfirmAction({ id: product.id, kind: 'unlist' })}
-                          className="w-full text-muted hover:text-foreground font-sans text-xs font-medium transition-colors py-1.5"
+                          className="text-muted hover:text-foreground font-sans text-xs font-medium transition-colors py-1.5"
                         >
                           Unlist
                         </button>
