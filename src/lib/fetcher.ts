@@ -24,8 +24,39 @@ export async function fetcher<T>(url: string): Promise<T> {
 }
 
 export async function postFetcher<TBody, TResponse>(url: string, body: TBody): Promise<TResponse> {
+  return bodyFetcher<TBody, TResponse>('POST', url, body);
+}
+
+export async function patchFetcher<TBody, TResponse>(url: string, body: TBody): Promise<TResponse> {
+  return bodyFetcher<TBody, TResponse>('PATCH', url, body);
+}
+
+export async function deleteFetcher<TResponse>(url: string): Promise<TResponse> {
   const res = await fetch(url, {
-    method: 'POST',
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+  });
+
+  if (!res.ok) {
+    const responseBody = (await res.json().catch(() => null)) as ApiErrorResponse | null;
+    throw new ApiError(
+      responseBody?.error.code ?? 'INTERNAL_ERROR',
+      responseBody?.error.message ?? 'Request failed',
+      res.status,
+    );
+  }
+
+  return res.json() as Promise<TResponse>;
+}
+
+async function bodyFetcher<TBody, TResponse>(
+  method: 'POST' | 'PATCH' | 'PUT',
+  url: string,
+  body: TBody,
+): Promise<TResponse> {
+  const res = await fetch(url, {
+    method,
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify(body),

@@ -136,6 +136,12 @@
   --color-bitscy-success: var(--bitscy-success);
   --color-bitscy-error: var(--bitscy-error);
 
+  /* Short aliases for design-system semantic colors so bg-error / text-success /
+     bg-gold and their opacity variants (bg-success/10 etc.) compile as utilities. */
+  --color-error: var(--bitscy-error);
+  --color-success: var(--bitscy-success);
+  --color-gold: var(--bitscy-gold);
+
   --spacing-touch: 2.75rem;
 }
 
