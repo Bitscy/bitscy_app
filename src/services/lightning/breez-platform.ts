@@ -1,14 +1,20 @@
 /**
- * Platform Breez wallet — singleton that the whole server shares.
+ * Platform Lightning wallet — singleton that the whole server shares.
  *
- * Architecture: one Breez Liquid wallet owned by Bitscy holds ALL
- * seller sats. Per-seller balances are tracked in the LedgerEntry table.
+ * Three backends, selected by env vars:
  *
- * In mock mode (USE_MOCK_LIGHTNING=true) this returns a stub that
- * satisfies callers without touching any real Lightning infrastructure.
+ *   USE_MOCK_LIGHTNING=true          → mock (auto-settles, no real node)
+ *   BREEZ_NETWORK=mainnet            → Breez SDK Liquid (real mainnet Lightning)
+ *   BREEZ_NETWORK=testnet (default)  → Breez SDK Liquid (testnet Lightning)
+ *   BREEZ_NETWORK=signet             → LNBits REST API (LNBITS_URL + LNBITS_ADMIN_KEY)
+ *
+ * Architecture: one platform wallet receives ALL buyer payments. Per-seller
+ * balances are tracked in the LedgerEntry table, not in per-seller wallets.
  */
 
-const USE_MOCK = process.env.USE_MOCK_LIGHTNING === 'true' || !process.env.BREEZ_API_KEY;
+const BREEZ_NETWORK = process.env.BREEZ_NETWORK ?? 'testnet';
+const USE_MOCK = process.env.USE_MOCK_LIGHTNING === 'true';
+const USE_LNBITS = !USE_MOCK && BREEZ_NETWORK !== 'mainnet' && BREEZ_NETWORK !== 'testnet';
 
 // ── Shared types ──────────────────────────────────────────────────────────────
 
@@ -24,7 +30,15 @@ export interface CreatedInvoice {
   expiresAt: Date;
 }
 
-export type SdkEventHandler = (event: { type: string; payment?: { paymentHash?: string; amountSat?: number } }) => void;
+// SDK 0.12.x event shape: { type, details: Payment }
+// Payment.details is PaymentDetails — for Lightning payments it has paymentHash.
+export type SdkEventHandler = (event: {
+  type: string;
+  details?: {
+    amountSat?: number;
+    details?: { type?: string; paymentHash?: string };
+  };
+}) => void;
 
 // ── Mock implementation ───────────────────────────────────────────────────────
 
@@ -33,18 +47,13 @@ const mockHandlers: SdkEventHandler[] = [];
 const mockSettled = new Set<string>();
 
 function mockPlatformWallet() {
-  return {
-    balanceSat: mockBalance,
-    pendingSendSat: 0n,
-    pendingReceiveSat: 0n,
-  };
+  return { balanceSat: mockBalance, pendingSendSat: 0n, pendingReceiveSat: 0n };
 }
 
 async function mockCreateInvoice(amountSats: bigint, description: string): Promise<CreatedInvoice> {
   const paymentHash = Array.from(crypto.getRandomValues(new Uint8Array(32)))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
-
   const bolt11 = `lnbc${amountSats}n1mock_${paymentHash.slice(0, 8)}`;
   const expiresAt = new Date(Date.now() + 3600_000);
 
@@ -54,24 +63,29 @@ async function mockCreateInvoice(amountSats: bigint, description: string): Promi
       mockSettled.add(paymentHash);
       mockBalance += amountSats;
       mockHandlers.forEach((h) =>
-        h({ type: 'paymentSucceeded', payment: { paymentHash, amountSat: Number(amountSats) } }),
+        h({ type: 'paymentSucceeded', details: { amountSat: Number(amountSats), details: { type: 'lightning', paymentHash } } }),
       );
     }
   }, 30_000);
 
-  void description; // used in real impl
+  void description;
   return { bolt11, paymentHash, expiresAt };
 }
 
 async function mockSendPayment(bolt11: string): Promise<void> {
-  // Mock: parse amount from bolt11 "lnbc<sats>n1..." pattern.
   const match = bolt11.match(/^lnbc(\d+)n/);
   const sats = match ? BigInt(match[1]!) : 1000n;
   if (mockBalance < sats) throw new Error('Insufficient mock platform wallet balance');
   mockBalance -= sats;
 }
 
-// ── Real implementation (Breez SDK Liquid) ────────────────────────────────────
+// ── LNBits implementation (testnet) ──────────────────────────────────────────
+
+async function getLnbits() {
+  return import('./lnbits-platform');
+}
+
+// ── Breez SDK Liquid implementation (mainnet) ─────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let sdkInstance: any | null = null;
@@ -87,7 +101,7 @@ async function getRealSdk() {
   if (!mnemonic) throw new Error('PLATFORM_BREEZ_MNEMONIC env var is required');
 
   const config = breez.defaultConfig(
-    process.env.BREEZ_NETWORK === 'mainnet' ? breez.LiquidNetwork.Mainnet : breez.LiquidNetwork.Testnet,
+    process.env.BREEZ_NETWORK === 'mainnet' ? 'mainnet' : 'testnet',
     process.env.BREEZ_API_KEY ?? '',
   );
 
@@ -106,6 +120,7 @@ async function getRealSdk() {
  */
 export async function connectPlatformWallet(): Promise<WalletInfo> {
   if (USE_MOCK) return mockPlatformWallet();
+  if (USE_LNBITS) return (await getLnbits()).lnbitsGetWalletInfo();
 
   const sdk = await getRealSdk();
   const info = await sdk.getInfo();
@@ -118,25 +133,25 @@ export async function connectPlatformWallet(): Promise<WalletInfo> {
 
 /**
  * Generate a BOLT-11 invoice on the platform wallet.
- * Records the paymentHash for settlement tracking.
  */
 export async function createPlatformInvoice(
   amountSats: bigint,
   description: string,
 ): Promise<CreatedInvoice> {
   if (USE_MOCK) return mockCreateInvoice(amountSats, description);
+  if (USE_LNBITS) return (await getLnbits()).lnbitsCreateInvoice(amountSats, description);
 
   const sdk = await getRealSdk();
+  const asciiDescription = description.replace(/[^\x00-\x7F]/g, '');
   const response = await sdk.receivePayment({
     prepareResponse: await sdk.prepareReceivePayment({
-      paymentMethod: { type: 'lightning' },
+      paymentMethod: 'bolt11Invoice',
       amount: { type: 'bitcoin', payerAmountSat: Number(amountSats) },
     }),
-    description,
+    description: asciiDescription,
   });
 
   const bolt11: string = response.destination;
-  // Extract payment hash from bolt11 via the existing bolt11 decoder.
   const { extractPaymentHash } = await import('./bolt11');
   const paymentHash = extractPaymentHash(bolt11);
   const expiresAt = new Date(Date.now() + 3600_000);
@@ -150,11 +165,10 @@ export async function createPlatformInvoice(
  */
 export async function sendPlatformPayment(bolt11: string): Promise<void> {
   if (USE_MOCK) return mockSendPayment(bolt11);
+  if (USE_LNBITS) return (await getLnbits()).lnbitsSendPayment(bolt11);
 
   const sdk = await getRealSdk();
-  const prepared = await sdk.prepareSendPayment({
-    destination: bolt11,
-  });
+  const prepared = await sdk.prepareSendPayment({ destination: bolt11 });
   await sdk.sendPayment({ prepareResponse: prepared });
 }
 
@@ -167,11 +181,13 @@ export async function addEventHandler(handler: SdkEventHandler): Promise<void> {
     mockHandlers.push(handler);
     return;
   }
+  if (USE_LNBITS) {
+    return (await getLnbits()).lnbitsAddEventHandler(handler);
+  }
 
   const sdk = await getRealSdk();
   await sdk.addEventListener({
     onEvent(event: { type: string }) {
-      // SDK contract: onEvent must be synchronous.
       handler(event as Parameters<typeof handler>[0]);
     },
   });

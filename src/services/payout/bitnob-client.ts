@@ -1,19 +1,24 @@
 /**
  * Bitnob sandbox client — real HTTP calls, HMAC-SHA256 auth.
  *
- * This is the canonical Bitnob integration file per Commerce CLAUDE.md.
  * Auth: HMAC-SHA256 (X-Auth-Client / X-Auth-Timestamp / X-Auth-Nonce / X-Auth-Signature).
- * Base URL: https://api.bitnob.com (sandbox credentials route to sandbox).
- *
- * Activated when USE_REAL_BITNOB=true.
  * Env vars: BITNOB_CLIENT_ID, BITNOB_CLIENT_SECRET, BITNOB_WEBHOOK_SECRET.
+ * Base URL: defaults to https://api.bitnob.com — override with BITNOB_API_BASE for sandbox.
+ *
+ * ⚠ ARCHITECTURE NOTE: The Integration Flow doc (Section 7) expects Bitnob to return a
+ * Lightning invoice which the platform Breez wallet then pays. The initiatePayout function
+ * below captures any lightning_invoice / payment_request field the quote response includes
+ * and returns it as `lightningInvoice` in PayoutResult. The caller (service.ts) is
+ * responsible for paying that invoice before debiting the seller's ledger.
+ * If sandbox testing shows Bitnob's API does NOT return a Lightning invoice (i.e. it handles
+ * the BTC side internally), the withdrawal flow in service.ts must be updated accordingly.
  */
 
 import { createHmac, randomBytes } from 'crypto';
 import type { PayoutResult, PayoutStatus, BankAccount } from '@/types/shared';
-import { satsToNgn } from '@/lib/currency';
+import { satsToNgnLive } from '@/services/pricing/coingecko';
 
-const BASE = 'https://api.bitnob.com';
+const BASE = process.env.BITNOB_API_BASE ?? 'https://api.bitnob.com';
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -75,7 +80,18 @@ async function resolveBankCode(bankName: string): Promise<string> {
 
 interface QuoteResponse {
   success: boolean;
-  data: { payout: { id: string; settlement_amount: string; exchange_rate: { rate: string } } };
+  data: {
+    payout: {
+      id: string;
+      settlement_amount: string;
+      exchange_rate: { rate: string };
+      // Bitnob may return a Lightning invoice for Bitscy to pay (see architecture note above).
+      // Field name is unconfirmed — capture common possibilities.
+      lightning_invoice?: string;
+      payment_request?: string;
+      bolt11?: string;
+    };
+  };
 }
 interface PayoutResponse {
   data: { payout: { id: string; status: string } };
@@ -101,8 +117,10 @@ export async function initiatePayout(
   amountSats: bigint,
   bankAccount: BankAccount,
 ): Promise<PayoutResult> {
-  const amountNgn = satsToNgn(amountSats);
-  const bankCode = await resolveBankCode(bankAccount.bankName);
+  const [amountNgn, bankCode] = await Promise.all([
+    satsToNgnLive(amountSats),
+    resolveBankCode(bankAccount.bankName),
+  ]);
 
   const qRef = `bitscy-q-${Date.now()}-${randomBytes(4).toString('hex')}`;
   const quote = await post<QuoteResponse>('/api/payouts/quotes', {
@@ -113,6 +131,12 @@ export async function initiatePayout(
     reference: qRef,
     amount: (Number(amountSats) / 100_000_000).toString(),
   });
+
+  // Capture the Lightning invoice if Bitnob returns one (field name unconfirmed).
+  const lightningInvoice =
+    quote.data.payout.lightning_invoice ??
+    quote.data.payout.payment_request ??
+    quote.data.payout.bolt11;
 
   const quoteId = quote.data.payout.id;
   const pRef = `bitscy-p-${Date.now()}-${randomBytes(4).toString('hex')}`;
@@ -138,6 +162,7 @@ export async function initiatePayout(
     amountSats: amountSats.toString(),
     amountNgn: amountNgn.toString(),
     etaSeconds: 30,
+    lightningInvoice,
   };
 }
 

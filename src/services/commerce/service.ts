@@ -6,13 +6,14 @@ import * as repository from './repository';
 import type { OrderWithRelations } from './repository';
 import * as catalogService from '@/services/catalog/service';
 import { createPlatformInvoice, sendPlatformPayment } from '@/services/lightning/breez-platform';
-import { trackPendingPayment, findByPaymentHash, deletePendingPayment } from './pending-payments';
+import { trackPendingPayment, findByPaymentHash } from './pending-payments';
 import { recordEntry, getBalance } from './ledger';
 import { getBtcNgnRate, satsToNgnLive } from '@/services/pricing/coingecko';
 import * as payoutService from '@/services/payout/service';
 import { publishEvent } from '@/services/nostr/client';
 import { signEventWithSystemKey } from '@/services/nostr/signing';
 import { NOSTR_KINDS } from '@/types/nostr';
+import { prisma } from '@/lib/db';
 
 // ============================================================================
 // Mappers
@@ -122,39 +123,78 @@ export async function createOrder(params: CreateOrderParams): Promise<Order & { 
  * Handle an incoming payment — called by both the Breez event listener and
  * the frontend polling endpoint. Idempotent: the atomic WHERE status='PENDING'
  * update ensures only the first caller triggers side effects.
+ *
+ * The three critical DB writes — PENDING→PAID order update, SALE ledger entry,
+ * and PendingPayment deletion — run inside a single Prisma transaction so they
+ * all succeed or all roll back. Non-fatal side effects (stock decrement, Nostr
+ * publish, push notification) run outside the transaction.
  */
 export async function markPaid(paymentHash: string): Promise<Order> {
-  const { order, wasAlreadyPaid } = await repository.markOrderPaid(paymentHash);
+  // Fetch the NGN rate before entering the transaction — it's an external HTTP
+  // call and must not hold a DB connection open while waiting for CoinGecko.
+  const { ratePerBtc } = await getBtcNgnRate();
 
-  if (!wasAlreadyPaid) {
-    // We won the race — run all side effects exactly once.
-    const pending = await findByPaymentHash(paymentHash);
+  const { order, wasAlreadyPaid } = await prisma.$transaction(async (tx) => {
+    // Cast tx to the full prisma type — safe because the transaction client has
+    // the same model API as PrismaClient; TypeScript just narrows it too aggressively.
+    const db = tx as unknown as typeof prisma;
 
-    if (pending) {
-      // Record the SALE in the seller's ledger at the current live BTC/NGN rate.
-      const { ratePerBtc } = await getBtcNgnRate();
-      await recordEntry({
-        userId: pending.sellerId,
-        amountSats: pending.amountSats,
-        type: 'SALE',
-        refId: order.id,
-        description: `Sale — order #${order.id}`,
-        recordedNgnRate: ratePerBtc,
+    // Look up PendingPayment inside the transaction for a consistent read.
+    const pending = await db.pendingPayment.findUnique({ where: { paymentHash } });
+
+    // Atomically transition PENDING → PAID. Only one concurrent caller wins.
+    const updated = await db.order.updateMany({
+      where: { paymentHash, status: 'PENDING' },
+      data: { status: 'PAID', paidAt: new Date() },
+    });
+
+    // Re-fetch with all relations needed by mapOrder and the side-effect helpers.
+    const order = await db.order.findUnique({
+      where: { paymentHash },
+      include: {
+        items: { include: { product: { select: { id: true, title: true, images: true } } } },
+        buyer: { select: { id: true, npub: true } },
+        seller: { select: { id: true, npub: true } },
+      },
+    });
+    if (!order) throw new Error(`Order not found for payment hash: ${paymentHash}`);
+
+    const wasAlreadyPaid = updated.count === 0;
+
+    if (!wasAlreadyPaid && pending) {
+      // Record the SALE in the seller's ledger. Must be inside the transaction
+      // so a ledger failure rolls back the order status change too.
+      await db.ledgerEntry.create({
+        data: {
+          userId: pending.sellerId,
+          amountSats: pending.amountSats,
+          type: 'SALE',
+          refId: order.id,
+          description: `Sale — order #${order.id}`,
+          recordedNgnRate: ratePerBtc,
+        },
       });
 
-      // Clean up the short-lived pending record.
-      await deletePendingPayment(paymentHash);
+      // Delete the short-lived PendingPayment — also inside the transaction.
+      await db.pendingPayment.delete({ where: { paymentHash } }).catch(() => {
+        // Already deleted by a concurrent call — idempotent, no-op.
+      });
     }
 
+    return { order, wasAlreadyPaid };
+  });
+
+  if (!wasAlreadyPaid) {
+    // Non-fatal side effects outside the transaction. A failure here does NOT
+    // roll back the payment or ledger entry — the seller is already credited.
     for (const item of order.items) {
       await repository.decrementProductStock(item.productId, item.quantity);
     }
-
     await publishOrderNostrEvent(order);
     await notifySeller(order);
   }
 
-  return mapOrder(order);
+  return mapOrder(order as unknown as OrderWithRelations);
 }
 
 async function publishOrderNostrEvent(order: OrderWithRelations): Promise<void> {
@@ -334,14 +374,22 @@ export async function initiatePayout(
     bankName: account.bankName,
   });
 
-  // Step 2: If Bitnob returns a Lightning invoice for us to pay, pay it now.
-  // In mock mode (or if no invoice), skip platform wallet payment.
-  if (result.lightningInvoice) {
-    await sendPlatformPayment(result.lightningInvoice);
+  // Step 2: Pay the Lightning invoice Bitnob issued. Per Integration Flow Section 7,
+  // the strict ordering is: Bitnob initiates → platform wallet pays → ledger debited.
+  // If Bitnob does not return a Lightning invoice we cannot proceed — throw so the
+  // ledger is never debited and the seller's balance stays intact.
+  if (!result.lightningInvoice) {
+    throw new ApiError(
+      'PAYOUT_FAILED',
+      'Bitnob did not return a Lightning invoice — payout aborted. No funds were moved.',
+      502,
+    );
   }
+  await sendPlatformPayment(result.lightningInvoice);
 
   // Step 3: ONLY after payment confirmed — debit the seller's ledger.
   const { ratePerBtc } = await getBtcNgnRate();
+  const amountNgn = (amountSats * ratePerBtc) / 100_000_000n;
   await recordEntry({
     userId: sellerId,
     amountSats: -amountSats,
@@ -352,8 +400,6 @@ export async function initiatePayout(
   });
 
   // Persist payout record for history and webhook updates.
-  const { ratePerBtc: ngnRate } = await getBtcNgnRate();
-  const amountNgn = (amountSats * ngnRate) / 100_000_000n;
   await repository.createPayout({
     user: { connect: { id: sellerId } },
     bankAccountId,
@@ -377,4 +423,259 @@ export async function subscribeToNotifications(
   auth: string,
 ): Promise<void> {
   await repository.upsertPushSubscription(userId, endpoint, p256dh, auth);
+}
+
+// ============================================================================
+// Bank account management (M11.5)
+// ============================================================================
+
+/** Mask account number to last 4 digits for client responses. */
+function maskAccountNumber(accountNumber: string): string {
+  return `****${accountNumber.slice(-4)}`;
+}
+
+function mapBankAccount(account: {
+  id: string;
+  bankName: string;
+  accountNumber: string;
+  accountName: string;
+  isDefault: boolean;
+  createdAt: Date;
+}) {
+  return {
+    id: account.id,
+    bankName: account.bankName,
+    accountNumberMasked: maskAccountNumber(account.accountNumber),
+    accountName: account.accountName,
+    isDefault: account.isDefault,
+    createdAt: account.createdAt.toISOString(),
+  };
+}
+
+export async function listBankAccounts(sellerId: string) {
+  const accounts = await repository.listBankAccountsByUser(sellerId);
+  return accounts.map(mapBankAccount);
+}
+
+export async function addBankAccount(
+  sellerId: string,
+  data: { bankName: string; accountNumber: string; accountName: string },
+) {
+  const account = await repository.createBankAccount({ userId: sellerId, ...data });
+  return mapBankAccount(account);
+}
+
+export async function removeBankAccount(sellerId: string, accountId: string): Promise<void> {
+  const account = await repository.findBankAccountById(accountId);
+  if (!account || account.userId !== sellerId) {
+    throw new ApiError('NOT_FOUND', 'Bank account not found', 404);
+  }
+
+  const hasPending = await repository.hasPendingPayoutsForAccount(accountId);
+  if (hasPending) {
+    throw new ApiError(
+      'BANK_ACCOUNT_IN_USE',
+      'Cannot delete a bank account with a pending payout',
+      409,
+    );
+  }
+
+  await repository.deleteBankAccountById(accountId);
+}
+
+// ============================================================================
+// Wallet activity feed (M16)
+// ============================================================================
+
+export async function getWalletActivity(
+  sellerId: string,
+  cursor: string | undefined,
+  limit: number,
+) {
+  const { items, nextCursor } = await repository.listLedgerActivity(sellerId, cursor, limit);
+
+  const mapped = items.map((entry) => {
+    // amountNgnDisplay is computed from the snapshotted rate at entry time — stable.
+    const ngnAmount = (BigInt(entry.amountSats) * BigInt(entry.recordedNgnRate)) / 100_000_000n;
+    return {
+      id: entry.id,
+      type: entry.type,
+      amountSats: entry.amountSats.toString(),
+      amountNgnDisplay: formatNgn(ngnAmount),
+      description: entry.description,
+      refId: entry.refId,
+      createdAt: entry.createdAt.toISOString(),
+    };
+  });
+
+  return { items: mapped, nextCursor };
+}
+
+// ============================================================================
+// Order retry (M15)
+// ============================================================================
+
+export async function retryOrder(
+  originalOrderId: string,
+  buyerId: string,
+): Promise<Order & { bolt11: string; paymentHash: string; expiresAt: string; ngnDisplay: string }> {
+  const original = await repository.findOrderById(originalOrderId);
+  if (!original) throw new ApiError('NOT_FOUND', 'Order not found', 404);
+  if (original.buyerId !== buyerId) throw new ApiError('FORBIDDEN', 'Access denied', 403);
+
+  if (original.status !== 'CANCELLED' && original.status !== 'PENDING') {
+    throw new ApiError('ORDER_NOT_RETRYABLE', 'Only cancelled orders can be retried', 400);
+  }
+
+  // Re-check product availability.
+  const productId = original.items[0]?.productId;
+  if (!productId) throw new ApiError('INTERNAL_ERROR', 'Order has no items', 500);
+
+  const quantity = original.items[0]?.quantity ?? 1;
+  const product = await catalogService.getProduct(productId);
+  if (product.status !== 'ACTIVE' || product.stock < quantity) {
+    throw new ApiError('OUT_OF_STOCK', 'Product is no longer available', 409);
+  }
+
+  // Create a fresh order (new ID) for the same product + buyer.
+  const newOrder = await createOrder({
+    productId,
+    quantity,
+    buyerId,
+    buyerNpub: original.buyer.npub,
+    encryptedShipping: original.encryptedShipping ?? undefined,
+  });
+
+  const invoice = await createPlatformInvoice(
+    BigInt(newOrder.totalSats),
+    `Bitscy order #${newOrder.id} (retry of #${originalOrderId}) — ${product.title}`,
+  );
+
+  await trackPendingPayment({
+    paymentHash: invoice.paymentHash,
+    sellerId: product.sellerId,
+    amountSats: BigInt(newOrder.totalSats),
+    orderId: newOrder.id,
+    description: `Order #${newOrder.id} — ${product.title}`,
+    expiresAt: invoice.expiresAt,
+  });
+
+  await repository.updateOrderInvoice(newOrder.id, invoice.bolt11, invoice.paymentHash);
+
+  const ngnAmount = await satsToNgnLive(BigInt(newOrder.totalSats));
+  const ngnDisplay = formatNgn(ngnAmount);
+
+  return {
+    ...newOrder,
+    bolt11: invoice.bolt11,
+    paymentHash: invoice.paymentHash,
+    expiresAt: invoice.expiresAt.toISOString(),
+    ngnDisplay,
+  };
+}
+
+// ============================================================================
+// Payout history (GET /api/payout/history)
+// ============================================================================
+
+export async function getPayoutHistory(
+  sellerId: string,
+  cursor: string | undefined,
+  limit: number,
+) {
+  const { items, nextCursor } = await repository.listPayoutsByUser(sellerId, cursor, limit);
+
+  const mapped = items.map((p) => ({
+    id: p.id,
+    status: p.status,
+    amountSats: p.amountSats.toString(),
+    amountNgn: p.amountNgn.toString(),
+    bankAccountId: p.bankAccountId,
+    externalId: p.externalId,
+    failureReason: p.failureReason ?? null,
+    createdAt: p.createdAt.toISOString(),
+    completedAt: p.completedAt?.toISOString() ?? null,
+  }));
+
+  return { items: mapped, nextCursor };
+}
+
+// ============================================================================
+// Expire pending orders (cron — /api/cron/expire-pending)
+// ============================================================================
+
+/**
+ * Cancel all PENDING orders whose Lightning invoice has expired.
+ * Called by the cron endpoint every 5 minutes.
+ * Returns the count of cancelled orders.
+ */
+export async function expirePendingOrders(): Promise<{ cancelled: number }> {
+  const expired = await repository.findExpiredPendingPaymentsWithOrders();
+  let cancelled = 0;
+
+  for (const pending of expired) {
+    if (!pending.orderId) continue;
+    try {
+      await repository.cancelExpiredOrder(pending.orderId, pending.paymentHash);
+      cancelled++;
+    } catch (err) {
+      // Log but don't let one failure block the rest.
+      console.error('[expire-pending] failed to cancel order:', pending.orderId, err);
+    }
+  }
+
+  return { cancelled };
+}
+
+// ============================================================================
+// Role-differentiated order detail (M15)
+// ============================================================================
+
+export async function getOrderDetailForUser(
+  orderId: string,
+  userId: string,
+  role: 'BUYER' | 'SELLER',
+) {
+  const order = await repository.findOrderById(orderId);
+  if (!order) throw new ApiError('NOT_FOUND', 'Order not found', 404);
+
+  // 403 for strangers — never 404 (don't leak existence).
+  if (order.buyerId !== userId && order.sellerId !== userId) {
+    throw new ApiError('FORBIDDEN', 'Access denied', 403);
+  }
+
+  const base = mapOrder(order);
+  const { ratePerBtc, recordedAt } = await getBtcNgnRate();
+  const ngnAmount = (BigInt(order.totalSats) * ratePerBtc) / 100_000_000n;
+
+  if (role === 'SELLER' && order.sellerId === userId) {
+    return {
+      ...base,
+      buyer: { npub: order.buyer.npub },
+      encryptedShipping: (order as unknown as { encryptedShipping: string | null }).encryptedShipping ?? null,
+      priceNgnDisplay: formatNgn(ngnAmount),
+      ngnRecordedAt: recordedAt,
+    };
+  }
+
+  // Buyer view — include seller summary.
+  const sellerUser = await prisma.user.findUnique({
+    where: { id: order.sellerId },
+    select: { id: true, username: true, displayName: true, avatar: true },
+  });
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://bitscy.com';
+  return {
+    ...base,
+    seller: {
+      id: sellerUser?.id ?? order.sellerId,
+      username: sellerUser?.username ?? '',
+      displayName: sellerUser?.displayName ?? null,
+      shopUrl: `${appUrl}/shop/${sellerUser?.username ?? ''}`,
+      initials: (sellerUser?.displayName ?? sellerUser?.username ?? 'B')[0]?.toUpperCase() ?? 'B',
+      avatar: sellerUser?.avatar ?? null,
+    },
+    priceNgnDisplay: formatNgn(ngnAmount),
+    ngnRecordedAt: recordedAt,
+  };
 }

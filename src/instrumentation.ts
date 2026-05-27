@@ -14,8 +14,12 @@ export async function register() {
   const { markPaid } = await import('@/services/commerce/service');
 
   await addEventHandler((event) => {
-    if (event.type === 'paymentSucceeded' && event.payment?.paymentHash) {
-      const hash = event.payment.paymentHash;
+    // Breez SDK 0.12.x event shape:
+    //   event.details          → Payment object
+    //   event.details.details  → PaymentDetails (type: "lightning" | "liquid" | "bitcoin")
+    // For Lightning receives, paymentHash lives in the inner details.
+    const hash = event.details?.details?.paymentHash;
+    if (event.type === 'paymentSucceeded' && hash) {
       // markPaid is idempotent — the race with frontend polling is resolved
       // atomically inside it (WHERE status = 'PENDING').
       markPaid(hash).catch((err: unknown) => {

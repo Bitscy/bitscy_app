@@ -183,7 +183,55 @@ export async function findBankAccountById(id: string) {
 }
 
 export async function listBankAccountsByUser(userId: string) {
-  return prisma.bankAccount.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } });
+  return prisma.bankAccount.findMany({ where: { userId }, orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }] });
+}
+
+export async function createBankAccount(data: {
+  userId: string;
+  bankName: string;
+  accountNumber: string;
+  accountName: string;
+}) {
+  // First account for this user becomes the default.
+  const existingCount = await prisma.bankAccount.count({ where: { userId: data.userId } });
+  return prisma.bankAccount.create({
+    data: { ...data, isDefault: existingCount === 0 },
+  });
+}
+
+export async function deleteBankAccountById(id: string): Promise<void> {
+  await prisma.bankAccount.delete({ where: { id } });
+}
+
+export async function hasPendingPayoutsForAccount(bankAccountId: string): Promise<boolean> {
+  const count = await prisma.payout.count({
+    where: { bankAccountId, status: 'PENDING' },
+  });
+  return count > 0;
+}
+
+// ============================================================================
+// Ledger activity feed (M16)
+// ============================================================================
+
+export async function listLedgerActivity(
+  userId: string,
+  cursor: string | undefined,
+  limit: number,
+) {
+  const take = Math.min(limit, 100) + 1; // over-fetch by 1 to detect next page
+  const entries = await prisma.ledgerEntry.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    take,
+  });
+
+  const hasMore = entries.length > limit;
+  const items = hasMore ? entries.slice(0, limit) : entries;
+  const nextCursor = hasMore ? (items[items.length - 1]?.id ?? null) : null;
+
+  return { items, nextCursor };
 }
 
 export async function createPayout(data: Prisma.PayoutCreateInput) {
@@ -213,5 +261,69 @@ export async function updatePayoutStatus(
   return prisma.payout.update({
     where: { id },
     data: { status, completedAt: completedAt ?? null },
+  });
+}
+
+export async function listPayoutsByUser(
+  userId: string,
+  cursor: string | undefined,
+  limit: number,
+) {
+  const take = Math.min(limit, 100) + 1;
+  const payouts = await prisma.payout.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    take,
+    include: {
+      // Join bank account for masked display (last4 derived at query time)
+    },
+  });
+
+  const hasMore = payouts.length > limit;
+  const items = hasMore ? payouts.slice(0, limit) : payouts;
+  const nextCursor = hasMore ? (items[items.length - 1]?.id ?? null) : null;
+  return { items, nextCursor };
+}
+
+// ============================================================================
+// Expired-order cleanup (cron M — /api/cron/expire-pending)
+// ============================================================================
+
+/**
+ * Find all expired PendingPayments that belong to a marketplace order.
+ * Returns enough data to cancel each order and restore stock.
+ */
+export async function findExpiredPendingPaymentsWithOrders() {
+  const now = new Date();
+  return prisma.pendingPayment.findMany({
+    where: {
+      expiresAt: { lt: now },
+      orderId: { not: null }, // only marketplace orders, not LNURL direct pays
+    },
+  });
+}
+
+/** Cancel a PENDING order, restore stock, delete PendingPayment. */
+export async function cancelExpiredOrder(orderId: string, paymentHash: string): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    // PENDING → CANCELLED (atomic guard)
+    const updated = await tx.order.updateMany({
+      where: { id: orderId, status: 'PENDING' },
+      data: { status: 'CANCELLED' },
+    });
+    if (updated.count === 0) return; // already handled
+
+    // Restore stock for each item
+    const items = await tx.orderItem.findMany({ where: { orderId } });
+    for (const item of items) {
+      await tx.product.update({
+        where: { id: item.productId },
+        data: { stock: { increment: item.quantity } },
+      });
+    }
+
+    // Delete the short-lived PendingPayment
+    await tx.pendingPayment.delete({ where: { paymentHash } }).catch(() => {/* already gone */});
   });
 }

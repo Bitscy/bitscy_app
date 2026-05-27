@@ -29,9 +29,10 @@ async function main() {
   const info = await connectPlatformWallet();
   console.log('Current balance:', info.balanceSat.toString(), 'sats');
 
-  const invoice = await createPlatformInvoice(AMOUNT_SATS, 'Platform wallet funding — M3');
+  const invoice = await createPlatformInvoice(AMOUNT_SATS, 'Platform wallet funding - M3');
 
-  console.log('\n── Pay this invoice from any signet Lightning wallet ──────────────────');
+  const network = process.env.BREEZ_NETWORK ?? 'mainnet';
+  console.log(`\n── Pay this invoice from any ${network} Lightning wallet ──────────────────`);
   console.log('\nBOLT-11:\n');
   console.log(invoice.bolt11);
   console.log('\nPayment hash:', invoice.paymentHash);
