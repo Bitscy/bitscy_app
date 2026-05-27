@@ -30,12 +30,21 @@ export interface CreatedInvoice {
   expiresAt: Date;
 }
 
-// SDK 0.12.x event shape: { type, details: Payment }
-// Payment.details is PaymentDetails — for Lightning payments it has paymentHash.
+// Breez SDK Liquid 0.9.x event shape (matches @breeztech/breez-sdk-liquid 0.9.2-rc1):
+//   event.type                          → e.g. "paymentSucceeded"
+//   event.details                       → Payment object
+//   event.details.paymentType           → "receive" | "send"
+//   event.details.amountSat             → amount in satoshis
+//   event.details.details               → PaymentDetails (discriminated union)
+//   event.details.details.type          → "lightning" | "liquid" | "bitcoin"
+//   event.details.details.paymentHash   → string (only when type === "lightning")
+//
+// All three backends (real Breez, LNBits, mock) emit this same shape.
 export type SdkEventHandler = (event: {
   type: string;
   details?: {
     amountSat?: number;
+    paymentType?: 'receive' | 'send';
     details?: { type?: string; paymentHash?: string };
   };
 }) => void;
@@ -63,7 +72,14 @@ async function mockCreateInvoice(amountSats: bigint, description: string): Promi
       mockSettled.add(paymentHash);
       mockBalance += amountSats;
       mockHandlers.forEach((h) =>
-        h({ type: 'paymentSucceeded', details: { amountSat: Number(amountSats), details: { type: 'lightning', paymentHash } } }),
+        h({
+            type: 'paymentSucceeded',
+            details: {
+              amountSat: Number(amountSats),
+              paymentType: 'receive',
+              details: { type: 'lightning', paymentHash },
+            },
+          }),
       );
     }
   }, 30_000);

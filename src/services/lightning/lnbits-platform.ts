@@ -114,9 +114,15 @@ const firedHashes = new Set<string>();
 function fireOnce(hash: string, amountMsat: number, handler: SdkEventHandler) {
   if (firedHashes.has(hash)) return;
   firedHashes.add(hash);
+  // Emit the same shape as the real Breez SDK and the mock so instrumentation.ts
+  // can read event.details.details.paymentHash regardless of which backend is active.
   handler({
     type: 'paymentSucceeded',
-    payment: { paymentHash: hash, amountSat: Math.floor(amountMsat / 1000) },
+    details: {
+      amountSat: Math.floor(amountMsat / 1000),
+      paymentType: 'receive',
+      details: { type: 'lightning', paymentHash: hash },
+    },
   });
 }
 
