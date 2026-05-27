@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import { Inter, DM_Serif_Display } from 'next/font/google';
 import './globals.css';
+import { SessionProvider } from '@/components/session-provider';
 
 const inter = Inter({
   subsets: ['latin'],
@@ -42,7 +43,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`${inter.variable} ${dmSerif.variable} bg-bitscy-background`}>
-      <body className="font-sans antialiased">{children}</body>
+      <body className="font-sans antialiased">
+        <SessionProvider>{children}</SessionProvider>
+      </body>
     </html>
   );
 }

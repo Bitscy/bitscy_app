@@ -5,14 +5,22 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Eye, EyeOff, Check, Copy } from 'lucide-react'
 
+import { ApiError } from '@/lib/api-error'
+import { signup } from '@/lib/api/auth'
+import { createIdentity } from '@/lib/auth/keygen'
+import { putSecretKey } from '@/lib/auth/storage'
+import { useSessionStore } from '@/store/session-store'
+
 export default function SignupPage() {
   const router = useRouter()
+  const setUser = useSessionStore(s => s.setUser)
   const [step, setStep] = useState<'create' | 'save'>('create')
   const [shopName, setShopName] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [urlTaken, setUrlTaken] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [passwordSaved, setPasswordSaved] = useState(false)
   const [copied, setCopied] = useState(false)
 
@@ -28,27 +36,66 @@ export default function SignupPage() {
 
   const shopUrl = shopName ? `bitscy.com/shop/${slugifyShopName(shopName)}` : ''
 
-  // Simulate checking if URL is taken (every 3rd unique name taken for demo)
   const handleShopNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value
-    setShopName(value)
-    // Simulate URL taken state for certain names
-    if (value.toLowerCase() === 'studio' || value.toLowerCase() === 'shop') {
-      setUrlTaken(true)
-    } else {
-      setUrlTaken(false)
-    }
+    setShopName(e.target.value)
+    // Clear stale errors as the user edits — the real uniqueness check
+    // happens server-side at submit time.
+    if (urlTaken) setUrlTaken(false)
+    if (errorMessage) setErrorMessage(null)
   }
 
   const handleCreateShop = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!shopName || !password || urlTaken) return
+    if (!shopName || !password || isSubmitting) return
 
     setIsSubmitting(true)
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 800))
-    setIsSubmitting(false)
-    setStep('save')
+    setUrlTaken(false)
+    setErrorMessage(null)
+
+    try {
+      // 1. Generate Nostr keypair and encrypt the recovery mnemonic with
+      //    the user's password — all in the browser. Server never sees
+      //    the password or plaintext key.
+      const identity = await createIdentity(password)
+
+      // 2. Persist the encrypted blob server-side. Server derives the
+      //    URL-safe slug from `username`, enforces uniqueness, and sets
+      //    the session cookie.
+      const { user } = await signup({
+        username: shopName,
+        displayName: shopName,
+        role: 'SELLER',
+        npub: identity.npubHex,
+        encryptedKey: identity.encrypted.ciphertext,
+        salt: identity.encrypted.salt,
+        iv: identity.encrypted.iv,
+      })
+
+      // 3. Cache the unlocked secret key locally so product creates and
+      //    profile updates don't re-prompt for the password. Best-effort —
+      //    a private-mode browser or IndexedDB quota issue isn't fatal.
+      try {
+        await putSecretKey(identity.npubHex, identity.secretKey)
+      } catch (cacheErr) {
+        console.warn('Failed to cache secret key locally', cacheErr)
+      }
+
+      // 4. Hydrate the session store so subsequent pages see the user
+      //    without round-tripping /api/auth/me.
+      setUser(user)
+
+      setStep('save')
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'CONFLICT') {
+        setUrlTaken(true)
+      } else if (err instanceof ApiError) {
+        setErrorMessage(err.message || 'Could not create your shop. Try again.')
+      } else {
+        setErrorMessage('Connection issue. Check your network and try again.')
+      }
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const handleCopyPassword = () => {
@@ -161,6 +208,17 @@ export default function SignupPage() {
                     Write this down. We can&apos;t reset it for you.
                   </p>
                 </div>
+
+                {/* Inline error (network / unexpected failures — URL-taken
+                    surfaces above next to the shop URL preview). */}
+                {errorMessage && (
+                  <p
+                    role="alert"
+                    className="font-sans text-sm text-error"
+                  >
+                    {errorMessage}
+                  </p>
+                )}
 
                 {/* Primary Action */}
                 <button

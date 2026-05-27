@@ -1,16 +1,18 @@
 'use client'
 
-import { Suspense, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Plus } from 'lucide-react'
 
-const SELLER = {
-  name: 'Adaeze Studio',
-  initials: 'A',
-  memberSince: 'April 2026',
-  shopUrl: 'bitscy.com/shop/adaeze',
-}
+import { logout } from '@/lib/api/auth'
+import { useSession } from '@/lib/auth/use-session'
+import { clearSecretKey } from '@/lib/auth/storage'
+import { useSessionStore } from '@/store/session-store'
+
+// SELLER identity is now derived from the session — see useSession() below.
+// STATS / PRODUCTS / ORDERS remain as mock data until the matching Commerce
+// (balance, sales) and Catalog (seller products, orders) endpoints land.
 
 const STATS = {
   availableBalance: 127500,
@@ -105,13 +107,23 @@ const STATUS_CONFIG: Record<string, { bg: string; text: string; label: string }>
 function SellerPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { user, isLoading: isSessionLoading } = useSession()
+  const setUser = useSessionStore(s => s.setUser)
+
+  // Auth guard: kick unauthenticated visitors out once hydration settles.
+  useEffect(() => {
+    if (!isSessionLoading && !user) {
+      router.push('/signin')
+    }
+  }, [isSessionLoading, user, router])
+
   // ?empty=1 renders the brand-new-seller dashboard branch (₦0 balance,
   // 0 sales, 0 products, 0 orders). Real implementation derives this
   // from session-state checks against actual data.
   const isEmpty = searchParams.get('empty') === '1'
-  // ?loading=1 demonstrates the loading state. Real implementation
-  // gates this on SWR / fetch isLoading flags.
-  const isLoading = searchParams.get('loading') === '1'
+  // Loading covers session hydration AND a ?loading=1 design-time toggle.
+  // Stats / products / orders skeletons gate on this single flag.
+  const isLoading = isSessionLoading || searchParams.get('loading') === '1'
 
   const [copiedText, setCopiedText] = useState<string | null>(null)
   const [shippingConfirm, setShippingConfirm] = useState<string | null>(null)
@@ -123,6 +135,15 @@ function SellerPageContent() {
   // state (avatar + about + location all set).
   const [profileBannerVisible, setProfileBannerVisible] = useState(true)
 
+  // Identity values derived from the session user.
+  const displayName = user?.displayName ?? user?.username ?? ''
+  const initials = (displayName.trim()[0] ?? '').toUpperCase()
+  const username = user?.username ?? ''
+  const shopUrl = username ? `bitscy.com/shop/${username}` : ''
+  const memberSince = user?.createdAt
+    ? new Date(user.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+    : ''
+
   // Empty-state derived values
   const balance = isEmpty ? 0 : STATS.availableBalance
   const balanceSats = isEmpty ? 0 : STATS.sats
@@ -132,7 +153,8 @@ function SellerPageContent() {
   const products = isEmpty ? [] : PRODUCTS
 
   const handleCopyShopUrl = () => {
-    navigator.clipboard.writeText(SELLER.shopUrl)
+    if (!shopUrl) return
+    navigator.clipboard.writeText(shopUrl)
     setCopiedText('shop')
     setTimeout(() => setCopiedText(null), 2000)
   }
@@ -142,7 +164,22 @@ function SellerPageContent() {
     setShippingConfirm(null)
   }
 
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
+    // Clear the local nsec cache first — even if the server call fails,
+    // the device shouldn't keep the unlocked key around.
+    if (user?.npub) {
+      try {
+        await clearSecretKey(user.npub)
+      } catch (err) {
+        console.warn('Failed to clear cached secret key', err)
+      }
+    }
+    try {
+      await logout()
+    } catch (err) {
+      console.warn('Server logout call failed', err)
+    }
+    setUser(null)
     router.push('/')
   }
 
@@ -167,7 +204,7 @@ function SellerPageContent() {
               style={{ backgroundColor: 'rgba(214, 121, 97, 0.2)', color: '#1F1410' }}
               aria-label="View profile"
             >
-              {SELLER.initials}
+              {initials}
             </Link>
             <Link
               href="/seller/settings"
@@ -192,27 +229,30 @@ function SellerPageContent() {
             {/* SHOP HEADER */}
             <div className="mb-8 lg:mb-12">
               <h1 className="font-serif text-3xl sm:text-4xl font-normal mb-2">
-                {SELLER.name}
+                {displayName}
               </h1>
               <p className="font-sans text-sm sm:text-base text-muted mb-4">
-                {totalSales} sales · {products.length} products listed · Member since {SELLER.memberSince}
+                {totalSales} sales · {products.length} products listed
+                {memberSince && ` · Member since ${memberSince}`}
               </p>
 
               {/* Shop URL Pill */}
-              <div className="inline-flex items-center gap-3 bg-card border border-border px-4 py-2 rounded-full">
-                <Link
-                  href="/shop/adaeze"
-                  className="font-sans text-xs sm:text-sm text-foreground tabular-nums hover:text-accent transition-colors"
-                >
-                  {SELLER.shopUrl}
-                </Link>
-                <button
-                  onClick={handleCopyShopUrl}
-                  className="text-xs sm:text-sm text-accent hover:opacity-80 transition-opacity font-sans font-medium"
-                >
-                  {copiedText === 'shop' ? 'Copied' : 'Copy'}
-                </button>
-              </div>
+              {username && (
+                <div className="inline-flex items-center gap-3 bg-card border border-border px-4 py-2 rounded-full">
+                  <Link
+                    href={`/shop/${username}`}
+                    className="font-sans text-xs sm:text-sm text-foreground tabular-nums hover:text-accent transition-colors"
+                  >
+                    {shopUrl}
+                  </Link>
+                  <button
+                    onClick={handleCopyShopUrl}
+                    className="text-xs sm:text-sm text-accent hover:opacity-80 transition-opacity font-sans font-medium"
+                  >
+                    {copiedText === 'shop' ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* COMPLETE-YOUR-SHOP BANNER (shown when profile is incomplete) */}

@@ -5,8 +5,16 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Eye, EyeOff } from 'lucide-react'
 
+import { login, requestChallenge } from '@/lib/api/auth'
+import { unlockIdentity } from '@/lib/auth/keygen'
+import { signChallenge } from '@/lib/auth/sign'
+import { deriveUsernameSlug } from '@/lib/auth/slug'
+import { putSecretKey } from '@/lib/auth/storage'
+import { useSessionStore } from '@/store/session-store'
+
 export default function SigninPage() {
   const router = useRouter()
+  const setUser = useSessionStore(s => s.setUser)
   const [shopName, setShopName] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -16,16 +24,56 @@ export default function SigninPage() {
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!shopName || !password) return
+    if (!shopName || !password || isSubmitting) return
 
     setIsSubmitting(true)
     setHasError(false)
 
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1200))
+    const username = deriveUsernameSlug(shopName)
 
-    // On success, navigate to /seller
-    router.push('/seller')
+    try {
+      // 1. Ask the server for the encrypted blob + a fresh challenge.
+      //    If the username doesn't exist, the server returns a shape-identical
+      //    fake — the decryption step below will throw, producing the same
+      //    "Invalid credentials" UX as a wrong password. No enumeration.
+      const blob = await requestChallenge(username)
+
+      // 2. Decrypt the blob locally with the password the user just typed.
+      //    Throws on wrong password OR on a fake blob.
+      const unlocked = await unlockIdentity(
+        { ciphertext: blob.encryptedKey, salt: blob.salt, iv: blob.iv },
+        password,
+      )
+
+      // 3. Sign the challenge with the decrypted secret key as a kind 27235
+      //    Nostr event. The server verifies the Schnorr signature against
+      //    the stored npub.
+      const signedChallenge = signChallenge(blob.challenge, unlocked.secretKey)
+
+      const { user } = await login({ username, signedChallenge })
+
+      // 4. Cache the unlocked secret key locally so subsequent signing
+      //    operations don't re-prompt for the password. Best-effort.
+      try {
+        await putSecretKey(user.npub, unlocked.secretKey)
+      } catch (cacheErr) {
+        console.warn('Failed to cache secret key locally', cacheErr)
+      }
+
+      // 5. Hydrate the session store so the destination page can render
+      //    without waiting on /api/auth/me.
+      setUser(user)
+
+      // 6. Route by role.
+      router.push(user.role === 'SELLER' ? '/seller' : '/')
+    } catch {
+      // Single error UX regardless of cause — wrong password, unknown
+      // username, signature rejection, network. Anything that fails the
+      // chain surfaces as the same "check your credentials" message so
+      // we leak nothing about whether the username exists.
+      setHasError(true)
+      setIsSubmitting(false)
+    }
   }
 
   const isFormValid = shopName.trim() && password
