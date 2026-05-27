@@ -1,6 +1,3 @@
-// Bitscy database schema
-// Owned by the Catalog Engineer. Schema changes are coordination points; review with the team.
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -20,19 +17,22 @@ enum LedgerEntryType {
 
 model User {
   id            String   @id @default(cuid())
-  npub          String   @unique // Nostr public key (hex)
+  npub          String   @unique // Nostr public key (hex, 64 chars — NOT bech32)
   username      String   @unique
   displayName   String?
   avatar        String?
   about         String?
+  location      String?  // e.g., "Lagos, Nigeria" — shown on storefront
   lightningAddr String?  @unique // e.g., "adaeze@bitscy.com"
   role          UserRole @default(BUYER)
+  closedAt      DateTime? // non-null = soft shop closure; null = open
 
-  // Server-side key storage for buyers who don't have NIP-07.
-  // Encrypted with a passphrase the user supplies; server cannot decrypt.
+  // Client-side encrypted key storage.
+  // The server NEVER sees the password or plaintext nsec.
+  // The client does all crypto (PBKDF2 + AES-GCM) and sends only the encrypted blob.
   encryptedKey String?
-  keySalt      String?
-  keyIv        String?
+  salt         String? // PBKDF2 salt (base64url)
+  iv           String? // AES-GCM IV (base64url)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -41,16 +41,11 @@ model User {
   ordersAsBuyer     Order[]            @relation("BuyerOrders")
   ordersAsSeller    Order[]            @relation("SellerOrders")
   bankAccounts      BankAccount[]
-  pushSubscriptions PushSubscription[]
-  payouts           Payout[]
   ledgerEntries     LedgerEntry[]
+  payouts           Payout[]
+  pushSubscriptions PushSubscription[]
 
   @@index([role])
-}
-
-enum UserRole {
-  BUYER
-  SELLER
 }
 
 model Product {
@@ -79,12 +74,6 @@ model Product {
   @@index([sellerId, status])
   @@index([status, createdAt])
   @@index([category, status])
-}
-
-enum ProductStatus {
-  ACTIVE
-  SOLD_OUT
-  UNLISTED
 }
 
 model Order {
@@ -120,14 +109,6 @@ model Order {
   @@index([buyerId, createdAt])
   @@index([sellerId, status])
   @@index([status])
-}
-
-enum OrderStatus {
-  PENDING
-  PAID
-  SHIPPED
-  DELIVERED
-  CANCELLED
 }
 
 model OrderItem {
@@ -169,12 +150,6 @@ model Payout {
   completedAt   DateTime?
 
   @@index([userId, createdAt])
-}
-
-enum PayoutStatus {
-  PENDING
-  SUCCESS
-  FAILED
 }
 
 model PushSubscription {
@@ -222,4 +197,29 @@ model PendingPayment {
   @@index([orderId])
   @@index([sellerId])
   @@index([expiresAt])
+}
+
+enum UserRole {
+  BUYER
+  SELLER
+}
+
+enum ProductStatus {
+  ACTIVE
+  SOLD_OUT
+  UNLISTED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum PayoutStatus {
+  PENDING
+  SUCCESS
+  FAILED
 }

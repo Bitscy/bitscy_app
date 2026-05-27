@@ -29,6 +29,10 @@ export async function createUser(data: Prisma.UserCreateInput) {
   return prisma.user.create({ data });
 }
 
+export async function updateUser(id: string, data: Prisma.UserUpdateInput) {
+  return prisma.user.update({ where: { id }, data });
+}
+
 // ============================================================================
 // Products
 // ============================================================================
