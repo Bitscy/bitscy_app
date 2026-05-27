@@ -32,7 +32,7 @@ export default function CategoryPills({ onCategoryChange }: CategoryPillsProps) 
   }
 
   return (
-    <div className="sticky top-20 z-10 bg-bitscy-background pt-6 pb-6 border-b border-[#E5DDD0]">
+    <div className="sticky top-0 z-10 bg-bitscy-background pt-6 pb-6 border-b border-[#E5DDD0]">
       <div className="flex gap-3 overflow-x-auto pb-2 scrollbar-hide pl-5 pr-5">
         {CATEGORIES.map((category) => (
           <button

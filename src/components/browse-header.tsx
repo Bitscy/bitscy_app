@@ -4,7 +4,7 @@ import { Search } from 'lucide-react'
 
 export default function BrowseHeader() {
   return (
-    <header className="fixed top-0 left-0 right-0 z-20 bg-[#FBF7F0] border-b border-[#E5DDD0] px-5 py-4" style={{ paddingLeft: '20px', paddingRight: '20px', paddingTop: '16px', paddingBottom: '16px' }}>
+    <header className="bg-[#FBF7F0] border-b border-[#E5DDD0]" style={{ paddingLeft: '20px', paddingRight: '20px', paddingTop: '16px', paddingBottom: '16px' }}>
       <div className="flex items-center justify-between mb-3">
         <h1 className="font-serif text-[28px] text-bitscy-text font-normal">
           Bitscy
