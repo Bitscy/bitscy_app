@@ -1,6 +1,6 @@
 import type { Order, OrderItem, OrderStatus } from '@/types/shared';
 import { ApiError } from '@/lib/api-error';
-import { formatNgn } from '@/lib/currency';
+import { formatNgn, satsToNgn } from '@/lib/currency';
 import { sendPushNotification, ExpiredSubscriptionError } from '@/lib/push';
 import * as repository from './repository';
 import type { OrderWithRelations } from './repository';
@@ -303,6 +303,21 @@ export async function checkInvoiceStatus(
   const pending = await findByPaymentHash(paymentHash);
   if (!pending) return { settled: false, order: null };
 
+  // Mock-mode fallback. The mock provider's setTimeout-based settlement fires
+  // in-process events that rely on the instrumentation hook's handler being
+  // registered in the same module instance — Next.js dev mode doesn't always
+  // honor that. Here we make the polling endpoint itself authoritative in
+  // mock mode: if the PendingPayment is older than the mock's 30s auto-settle
+  // window, mark it paid synchronously. Real Lightning never takes this path.
+  if (process.env.USE_MOCK_LIGHTNING === 'true') {
+    const MOCK_SETTLE_MS = 30_000;
+    const age = Date.now() - pending.createdAt.getTime();
+    if (age >= MOCK_SETTLE_MS) {
+      const paidOrder = await markPaid(paymentHash);
+      return { settled: true, order: paidOrder };
+    }
+  }
+
   return { settled: false, order: null };
 }
 
@@ -334,17 +349,15 @@ export async function getSellerBalance(sellerId: string): Promise<{
   balanceNgn: string;
   rateStale: boolean;
 }> {
-  const [balanceSats, { ratePerBtc, stale }] = await Promise.all([
-    getBalance(sellerId),
-    getBtcNgnRate(),
-  ]);
+  const balanceSats = await getBalance(sellerId);
 
-  const ngnAmount = (balanceSats * ratePerBtc) / 100_000_000n;
-
+  // Use the fixed demo rate (same as product/order NGN displays) so a seller's
+  // balance always matches what their sale was quoted at. The live CoinGecko
+  // rate is still used for ledger snapshots and v2 production pricing.
   return {
     balanceSats: balanceSats.toString(),
-    balanceNgn: formatNgn(ngnAmount),
-    rateStale: stale,
+    balanceNgn: formatNgn(satsToNgn(balanceSats)),
+    rateStale: false,
   };
 }
 
