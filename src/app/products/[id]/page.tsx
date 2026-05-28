@@ -131,10 +131,12 @@ function ProductPageContent({ params }: { params: Promise<{ id: string }> }) {
   const handleBuy = async () => {
     if (!product || isBuying) return
 
-    // Auth gate. Slice B will offer inline buyer signup; for now, kick
-    // unauthenticated visitors to /signin and let them come back.
+    // Auth gate. First-time buyers go to /buyer/signup with a returnTo so
+    // we land them back on this product after signup. Returning buyers can
+    // tap "Already have an account? Sign in" from there.
     if (!user) {
-      router.push('/signin')
+      const returnTo = `/products/${product.id}`
+      router.push(`/buyer/signup?returnTo=${encodeURIComponent(returnTo)}`)
       return
     }
 
