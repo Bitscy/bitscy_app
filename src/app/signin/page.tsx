@@ -1,20 +1,42 @@
 'use client'
 
-import { useState } from 'react'
+import { Suspense, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Eye, EyeOff } from 'lucide-react'
 
+import { ApiError } from '@/lib/api-error'
 import { login, requestChallenge } from '@/lib/api/auth'
+import { createOrder } from '@/lib/api/commerce'
 import { unlockIdentity } from '@/lib/auth/keygen'
 import { signChallenge } from '@/lib/auth/sign'
 import { deriveUsernameSlug } from '@/lib/auth/slug'
 import { putSecretKey } from '@/lib/auth/storage'
 import { useSessionStore } from '@/store/session-store'
 
-export default function SigninPage() {
+function SigninPageContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const setUser = useSessionStore(s => s.setUser)
+
+  // Two ways to arrive here:
+  //   ?buyProductId=<id>  → buyer was mid-purchase. On success, auto-create
+  //                         the order and route to checkout.
+  //   ?returnTo=<path>    → generic post-signin redirect.
+  // buyProductId takes precedence.
+  const buyProductId = searchParams.get('buyProductId')
+  const returnTo = searchParams.get('returnTo')
+
+  // Thread the buy intent through links to other auth pages so a buyer
+  // who lands on signin but doesn't have an account ends up back on the
+  // right page without losing the product they wanted.
+  const sellerSignupHref = buyProductId
+    ? `/signup?buyProductId=${encodeURIComponent(buyProductId)}`
+    : '/signup'
+  const buyerSignupHref = buyProductId
+    ? `/buyer/signup?buyProductId=${encodeURIComponent(buyProductId)}`
+    : '/buyer/signup'
+
   const [shopName, setShopName] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -64,7 +86,34 @@ export default function SigninPage() {
       //    without waiting on /api/auth/me.
       setUser(user)
 
-      // 6. Route by role.
+      // 6. Route. If the buyer arrived here mid-purchase, create the order
+      //    now and head straight to checkout — they shouldn't have to
+      //    re-tap Buy. Otherwise, role-based default destination, with an
+      //    optional ?returnTo override.
+      if (buyProductId) {
+        try {
+          const order = await createOrder({ productId: buyProductId, quantity: 1 })
+          router.push(`/checkout/${order.id}`)
+          return
+        } catch (err) {
+          // Surface a clear reason and route back to the product page so
+          // the buyer sees the issue in context (e.g., sold-out banner).
+          const isOutOfStock = err instanceof ApiError && err.code === 'OUT_OF_STOCK'
+          if (isOutOfStock) {
+            // Sold out is a real product-state — go to the product page.
+            router.push(`/products/${buyProductId}`)
+          } else {
+            router.push(`/products/${buyProductId}`)
+          }
+          return
+        }
+      }
+
+      if (returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//')) {
+        router.push(returnTo)
+        return
+      }
+
       router.push(user.role === 'SELLER' ? '/seller' : '/')
     } catch {
       // Single error UX regardless of cause — wrong password, unknown
@@ -196,7 +245,7 @@ export default function SigninPage() {
               <p className="font-sans text-base">
                 <span className="text-muted">Don&apos;t have a shop yet? </span>
                 <Link
-                  href="/signup"
+                  href={sellerSignupHref}
                   className="text-accent hover:underline transition-colors"
                 >
                   Open one
@@ -207,7 +256,7 @@ export default function SigninPage() {
               <p className="font-sans text-sm">
                 <span className="text-muted">Just want to buy? </span>
                 <Link
-                  href="/buyer/signup"
+                  href={buyerSignupHref}
                   className="text-accent hover:underline transition-colors"
                 >
                   Sign up here
@@ -244,5 +293,13 @@ export default function SigninPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function SigninPage() {
+  return (
+    <Suspense fallback={<div className="bg-background min-h-screen" />}>
+      <SigninPageContent />
+    </Suspense>
   )
 }

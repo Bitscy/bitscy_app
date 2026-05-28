@@ -131,12 +131,12 @@ function ProductPageContent({ params }: { params: Promise<{ id: string }> }) {
   const handleBuy = async () => {
     if (!product || isBuying) return
 
-    // Auth gate. First-time buyers go to /buyer/signup with a returnTo so
-    // we land them back on this product after signup. Returning buyers can
-    // tap "Already have an account? Sign in" from there.
+    // Auth gate. First-time buyers go to /buyer/signup; returning buyers
+    // tap "Already have an account? Sign in" from there. Both flows carry
+    // ?buyProductId so the auth pages auto-create the order and route to
+    // /checkout once the buyer is authenticated — no second Buy click.
     if (!user) {
-      const returnTo = `/products/${product.id}`
-      router.push(`/buyer/signup?returnTo=${encodeURIComponent(returnTo)}`)
+      router.push(`/buyer/signup?buyProductId=${encodeURIComponent(product.id)}`)
       return
     }
 

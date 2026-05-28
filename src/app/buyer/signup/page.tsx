@@ -7,6 +7,7 @@ import { Eye, EyeOff, Check, Copy } from 'lucide-react'
 
 import { ApiError } from '@/lib/api-error'
 import { signup } from '@/lib/api/auth'
+import { createOrder } from '@/lib/api/commerce'
 import { createIdentity } from '@/lib/auth/keygen'
 import { putSecretKey } from '@/lib/auth/storage'
 import { useSessionStore } from '@/store/session-store'
@@ -16,10 +17,21 @@ function BuyerSignupPageContent() {
   const searchParams = useSearchParams()
   const setUser = useSessionStore(s => s.setUser)
 
-  // The Buy button on /products/[id] redirects here with ?returnTo=/products/<id>
-  // when the buyer isn't signed in. Fall back to /marketplace after sign-up
-  // when there's no explicit destination.
+  // Two ways to arrive here:
+  //   ?buyProductId=<id>  → Buy click from /products/[id]; after signup
+  //                         we auto-create the order and route to checkout.
+  //   ?returnTo=<path>    → generic post-signup redirect.
+  // buyProductId takes precedence.
+  const buyProductId = searchParams.get('buyProductId')
   const returnTo = searchParams.get('returnTo')
+
+  // Thread the buy intent through the "Already have an account?" link so a
+  // returning buyer also lands on checkout after signing in.
+  const signinHref = buyProductId
+    ? `/signin?buyProductId=${encodeURIComponent(buyProductId)}`
+    : returnTo
+      ? `/signin?returnTo=${encodeURIComponent(returnTo)}`
+      : '/signin'
 
   const [step, setStep] = useState<'create' | 'save'>('create')
 
@@ -31,6 +43,9 @@ function BuyerSignupPageContent() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [passwordSaved, setPasswordSaved] = useState(false)
   const [copied, setCopied] = useState(false)
+  // Continuation state — covers the auto-buy round-trip from step 2.
+  const [isContinuing, setIsContinuing] = useState(false)
+  const [continueError, setContinueError] = useState<string | null>(null)
 
   const handleDisplayNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setDisplayName(e.target.value)
@@ -95,10 +110,34 @@ function BuyerSignupPageContent() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const handleContinue = () => {
-    // Honour ?returnTo from the Buy-flow redirect so the buyer lands back
-    // on the product they were trying to purchase. Restricted to in-app
-    // paths so a malicious link can't bounce them off-site.
+  const handleContinue = async () => {
+    if (isContinuing) return
+
+    // Auto-buy: the buyer arrived here mid-purchase. Create the order
+    // now (the session is fresh) and route to checkout. If the order
+    // can't be created (out of stock, etc.) send them to the product
+    // page so they can see why.
+    if (buyProductId) {
+      setIsContinuing(true)
+      setContinueError(null)
+      try {
+        const order = await createOrder({ productId: buyProductId, quantity: 1 })
+        router.push(`/checkout/${order.id}`)
+        return
+      } catch (err) {
+        if (err instanceof ApiError && err.code === 'OUT_OF_STOCK') {
+          setContinueError('That piece just sold — heading back to its page.')
+        } else {
+          setContinueError('Could not create your order. Heading back to the product.')
+        }
+        // Brief pause so the seller can read the message, then route.
+        setTimeout(() => router.push(`/products/${buyProductId}`), 1500)
+        return
+      }
+    }
+
+    // Generic returnTo path. Restricted to in-app paths so a malicious
+    // link can't bounce the buyer off-site.
     if (returnTo && returnTo.startsWith('/') && !returnTo.startsWith('//')) {
       router.push(returnTo)
     } else {
@@ -221,7 +260,7 @@ function BuyerSignupPageContent() {
               {/* Secondary action */}
               <div className="text-center">
                 <Link
-                  href="/signin"
+                  href={signinHref}
                   className="font-sans text-base text-primary hover:underline transition-colors"
                 >
                   Already have an account? Sign in
@@ -293,11 +332,25 @@ function BuyerSignupPageContent() {
 
                 <button
                   onClick={handleContinue}
-                  disabled={!passwordSaved}
-                  className="w-full h-14 bg-primary text-primary-foreground font-sans text-base font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90"
+                  disabled={!passwordSaved || isContinuing}
+                  className="w-full h-14 bg-primary text-primary-foreground font-sans text-base font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90 flex items-center justify-center gap-2"
                 >
-                  Continue to browse
+                  {isContinuing ? (
+                    <>
+                      <span className="inline-block w-4 h-4 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+                      {buyProductId ? 'Creating your order…' : 'Just a moment…'}
+                    </>
+                  ) : buyProductId ? (
+                    'Continue to checkout'
+                  ) : (
+                    'Continue to browse'
+                  )}
                 </button>
+                {continueError && (
+                  <p role="alert" className="font-sans text-sm text-error">
+                    {continueError}
+                  </p>
+                )}
               </div>
 
               <div className="text-center">
