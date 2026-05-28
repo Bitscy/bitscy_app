@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { Check, ChevronLeft, ChevronRight, Copy, Flame, X } from 'lucide-react'
 
 import { ApiError } from '@/lib/api-error'
+import { createOrder } from '@/lib/api/commerce'
 import { getProduct } from '@/lib/api/products'
 import { useSession } from '@/lib/auth/use-session'
 import type { Product, ProductCategory } from '@/types/shared'
@@ -121,6 +122,38 @@ function ProductPageContent({ params }: { params: Promise<{ id: string }> }) {
     window.addEventListener('scroll', handleScroll)
     return () => window.removeEventListener('scroll', handleScroll)
   }, [buyButtonRef])
+
+  // Buy flow state. `buyError` surfaces server errors (out of stock,
+  // network, etc.) inline above the Buy CTA.
+  const [isBuying, setIsBuying] = useState(false)
+  const [buyError, setBuyError] = useState<string | null>(null)
+
+  const handleBuy = async () => {
+    if (!product || isBuying) return
+
+    // Auth gate. Slice B will offer inline buyer signup; for now, kick
+    // unauthenticated visitors to /signin and let them come back.
+    if (!user) {
+      router.push('/signin')
+      return
+    }
+
+    setIsBuying(true)
+    setBuyError(null)
+    try {
+      const order = await createOrder({ productId: product.id, quantity: 1 })
+      router.push(`/checkout/${order.id}`)
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'OUT_OF_STOCK') {
+        setBuyError('This piece just sold — it’s no longer available.')
+      } else if (err instanceof ApiError) {
+        setBuyError(err.message || 'Could not create the order. Try again.')
+      } else {
+        setBuyError('Connection issue. Check your network and try again.')
+      }
+      setIsBuying(false)
+    }
+  }
 
   // Sync the dot indicator with native scroll position. Fires on every
   // scroll frame; we just round to the nearest slide.
@@ -462,12 +495,19 @@ function ProductPageContent({ params }: { params: Promise<{ id: string }> }) {
                 Sold out
               </button>
             ) : (
-              <Link
-                href={`/checkout/order-${product.id}`}
-                className="block w-full text-center py-4 px-6 rounded font-sans text-lg font-medium bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+              <button
+                type="button"
+                onClick={handleBuy}
+                disabled={isBuying}
+                className="block w-full text-center py-4 px-6 rounded font-sans text-lg font-medium bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                Buy {priceDisplay}
-              </Link>
+                {isBuying ? 'Creating order…' : `Buy ${priceDisplay}`}
+              </button>
+            )}
+            {buyError && (
+              <p role="alert" className="font-sans text-sm text-error mt-3">
+                {buyError}
+              </p>
             )}
           </div>
 
@@ -519,12 +559,14 @@ function ProductPageContent({ params }: { params: Promise<{ id: string }> }) {
               Sold out
             </button>
           ) : (
-            <Link
-              href={`/checkout/order-${product.id}`}
-              className="block w-full text-center py-3 px-6 rounded font-sans text-base font-medium bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+            <button
+              type="button"
+              onClick={handleBuy}
+              disabled={isBuying}
+              className="block w-full text-center py-3 px-6 rounded font-sans text-base font-medium bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              Buy {priceDisplay}
-            </Link>
+              {isBuying ? 'Creating order…' : `Buy ${priceDisplay}`}
+            </button>
           )}
         </div>
       )}
