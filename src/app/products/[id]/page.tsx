@@ -131,10 +131,12 @@ function ProductPageContent({ params }: { params: Promise<{ id: string }> }) {
   const handleBuy = async () => {
     if (!product || isBuying) return
 
-    // Auth gate. Slice B will offer inline buyer signup; for now, kick
-    // unauthenticated visitors to /signin and let them come back.
+    // Auth gate. First-time buyers go to /buyer/signup; returning buyers
+    // tap "Already have an account? Sign in" from there. Both flows carry
+    // ?buyProductId so the auth pages auto-create the order and route to
+    // /checkout once the buyer is authenticated — no second Buy click.
     if (!user) {
-      router.push('/signin')
+      router.push(`/buyer/signup?buyProductId=${encodeURIComponent(product.id)}`)
       return
     }
 
