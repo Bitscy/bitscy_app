@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { Loader2 } from 'lucide-react'
@@ -9,7 +9,16 @@ import CategoryPills from '@/components/category-pills'
 import ProductCard from '@/components/product-card'
 import BottomNavigation from '@/components/bottom-navigation'
 
-interface Product {
+import { ApiError } from '@/lib/api-error'
+import { listProducts } from '@/lib/api/products'
+import type { Product as ApiProduct, ProductCategory } from '@/types/shared'
+
+// Mirror the server's demo BTC/NGN rate so we can parse priceNgnDisplay
+// or fall back to sats-based conversion. Same constants as elsewhere.
+const NGN_PER_BTC = 145_000_000n
+const SATS_PER_BTC = 100_000_000n
+
+interface CardProduct {
   id: string
   image: string
   title: string
@@ -17,74 +26,90 @@ interface Product {
   priceSats: number
 }
 
-const SAMPLE_PRODUCTS: Product[] = [
-  {
-    id: '1',
-    image: '/artwork-1.jpg',
-    title: 'Geometric Abstract Composition',
-    priceNaira: 45000,
-    priceSats: 125000,
-  },
-  {
-    id: '2',
-    image: '/artwork-2.jpg',
-    title: 'Indigo Woven Textile',
-    priceNaira: 28000,
-    priceSats: 85000,
-  },
-  {
-    id: '3',
-    image: '/artwork-3.jpg',
-    title: 'Handthrown Ceramic Vessel',
-    priceNaira: 35000,
-    priceSats: 95000,
-  },
-  {
-    id: '4',
-    image: '/artwork-4.jpg',
-    title: 'Contemporary Color Field',
-    priceNaira: 52000,
-    priceSats: 145000,
-  },
-  {
-    id: '5',
-    image: '/artwork-5.jpg',
-    title: 'Tooled Leather Journal',
-    priceNaira: 22000,
-    priceSats: 65000,
-  },
-  {
-    id: '6',
-    image: '/artwork-6.jpg',
-    title: 'Beaded Statement Collar',
-    priceNaira: 38000,
-    priceSats: 110000,
-  },
-  {
-    id: '7',
-    image: '/artwork-7.jpg',
-    title: 'Bronze Sculptural Form',
-    priceNaira: 88000,
-    priceSats: 280000,
-  },
-  {
-    id: '8',
-    image: '/artwork-8.jpg',
-    title: 'Woodcut Print Series',
-    priceNaira: 18000,
-    priceSats: 55000,
-  },
-]
+// "₦25,000" → 25000. Fallback computes from priceSats if the formatted
+// string is missing or unparseable.
+function parseNgnDisplay(formatted: string, satsStr: string): number {
+  const digits = formatted.replace(/[^\d]/g, '')
+  if (digits) {
+    const n = parseInt(digits, 10)
+    if (Number.isFinite(n)) return n
+  }
+  try {
+    const sats = BigInt(satsStr)
+    return Number((sats * NGN_PER_BTC) / SATS_PER_BTC)
+  } catch {
+    return 0
+  }
+}
+
+function parseSatsNumber(satsStr: string): number {
+  try {
+    return Number(BigInt(satsStr))
+  } catch {
+    return 0
+  }
+}
+
+function toCardProduct(p: ApiProduct): CardProduct {
+  return {
+    id: p.id,
+    image: p.images[0] ?? '',
+    title: p.title,
+    priceNaira: parseNgnDisplay(p.priceNgnDisplay ?? '', p.priceSats),
+    priceSats: parseSatsNumber(p.priceSats),
+  }
+}
 
 function BrowsePageContent() {
   const searchParams = useSearchParams()
-  const [selectedCategory, setSelectedCategory] = useState('Paintings')
+  const [selectedCategory, setSelectedCategory] = useState<ProductCategory | null>(null)
 
-  // Design-time toggles for the three async states.
-  // Real implementation derives these from SWR / fetch isLoading + data length + error.
-  const isLoading = searchParams.get('loading') === '1'
-  const isEmpty = searchParams.get('empty') === '1'
-  const hasError = searchParams.get('error') === '1'
+  const [products, setProducts] = useState<CardProduct[]>([])
+  const [isFetching, setIsFetching] = useState(true)
+  const [fetchError, setFetchError] = useState(false)
+
+  // Design-time toggles still work for previewing the empty / loading /
+  // error skins alongside the real fetch states.
+  const previewLoading = searchParams.get('loading') === '1'
+  const previewEmpty = searchParams.get('empty') === '1'
+  const previewError = searchParams.get('error') === '1'
+
+  useEffect(() => {
+    let cancelled = false
+    setIsFetching(true)
+    setFetchError(false)
+    listProducts({
+      pageSize: 50,
+      ...(selectedCategory ? { category: selectedCategory } : {}),
+    })
+      .then(res => {
+        if (cancelled) return
+        setProducts(res.items.map(toCardProduct))
+      })
+      .catch(err => {
+        if (cancelled) return
+        // ApiError or network — both render the same "Connection issue"
+        // page. Don't differentiate to a casual browser.
+        console.warn('Marketplace fetch failed', err)
+        if (err instanceof ApiError || err instanceof Error) {
+          setFetchError(true)
+        } else {
+          setFetchError(true)
+        }
+        setProducts([])
+      })
+      .finally(() => {
+        if (!cancelled) setIsFetching(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedCategory])
+
+  const isLoading = previewLoading || isFetching
+  const hasError = previewError || (!isLoading && fetchError)
+  const isEmpty =
+    previewEmpty || (!isLoading && !hasError && products.length === 0)
 
   return (
     <div className="flex flex-col min-h-screen bg-bitscy-background">
@@ -114,7 +139,7 @@ function BrowsePageContent() {
           )}
 
           {/* ERROR */}
-          {!isLoading && hasError && (
+          {hasError && (
             <div className="py-20 flex flex-col items-center justify-center text-center">
               <div
                 className="w-16 h-16 rounded-full border-2 mb-5 flex items-center justify-center"
@@ -138,16 +163,20 @@ function BrowsePageContent() {
           )}
 
           {/* EMPTY */}
-          {!isLoading && !hasError && isEmpty && (
+          {isEmpty && !hasError && !isLoading && (
             <div className="py-20 flex flex-col items-center justify-center text-center">
               <div
                 className="w-20 h-20 rounded-full border-2 mb-6"
                 style={{ borderColor: '#E8B43D' }}
                 aria-hidden="true"
               />
-              <h2 className="font-serif text-3xl font-normal mb-2">Nothing listed yet.</h2>
+              <h2 className="font-serif text-3xl font-normal mb-2">
+                {selectedCategory ? 'Nothing here yet.' : 'Nothing listed yet.'}
+              </h2>
               <p className="font-sans text-base text-muted mb-6 max-w-sm">
-                The marketplace is brand new. Be one of the first artists to list a piece.
+                {selectedCategory
+                  ? "No pieces in this category yet. Try another, or be the first to list one."
+                  : 'The marketplace is brand new. Be one of the first artists to list a piece.'}
               </p>
               <Link
                 href="/sell"
@@ -161,7 +190,7 @@ function BrowsePageContent() {
           {/* POPULATED */}
           {!isLoading && !hasError && !isEmpty && (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-              {SAMPLE_PRODUCTS.map(product => (
+              {products.map(product => (
                 <Link key={product.id} href={`/products/${product.id}`}>
                   <ProductCard
                     image={product.image}
