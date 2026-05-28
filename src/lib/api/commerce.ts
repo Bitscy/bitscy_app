@@ -9,7 +9,7 @@
  * pre-formatted ("₦12,345") from the server using the demo rate.
  */
 
-import { fetcher, patchFetcher } from '@/lib/fetcher';
+import { fetcher, patchFetcher, postFetcher } from '@/lib/fetcher';
 import type { Order } from '@/types/shared';
 
 // ============================================================================
@@ -52,6 +52,48 @@ export function listOrders(query: ListOrdersQuery = {}): Promise<ListOrdersRespo
 
 export function getOrder(id: string): Promise<Order> {
   return fetcher(`/api/orders/${encodeURIComponent(id)}`);
+}
+
+// ============================================================================
+// Order creation (buyer-side)
+// ============================================================================
+
+export interface CreateOrderInput {
+  productId: string;
+  quantity?: number; // defaults to 1 server-side
+  /**
+   * Optional. NIP-04 ciphertext of the buyer's shipping address,
+   * encrypted to the seller's pubkey client-side. Slice B will wire this.
+   */
+  encryptedShipping?: string;
+}
+
+/**
+ * POST /api/orders. Requires an authenticated buyer (or seller buying
+ * from someone else). The response is the freshly created Order with
+ * `invoiceBolt11` + `paymentHash` already populated.
+ */
+export function createOrder(
+  input: CreateOrderInput,
+): Promise<Order & { ngnDisplay: string }> {
+  return postFetcher('/api/orders', input);
+}
+
+// ============================================================================
+// Invoice polling
+// ============================================================================
+
+export interface InvoiceStatus {
+  settled: boolean;
+  order: Order | null;
+}
+
+/**
+ * GET /api/lightning/verify/[paymentHash]. The checkout page hits this
+ * on a polling schedule until the order's status flips to PAID.
+ */
+export function verifyInvoiceStatus(paymentHash: string): Promise<InvoiceStatus> {
+  return fetcher(`/api/lightning/verify/${encodeURIComponent(paymentHash)}`);
 }
 
 /**
