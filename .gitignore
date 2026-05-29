@@ -54,6 +54,13 @@ prisma/dev.db-journal
 package-lock.json
 yarn.lock
 
-# Local AI assistant instruction files (kept out of the open-source repo)
+# Breez SDK local wallet storage (dev only)
+.breez-wallets
+
+# Local  assistant instruction files 
 CLAUDE.md
 **/CLAUDE.md
+
+# Local design / planning notes (not for the open-source repo). Narrow
+# this pattern (e.g., docs/local/) when public docs are added.
+docs/

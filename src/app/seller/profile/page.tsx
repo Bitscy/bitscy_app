@@ -1,0 +1,375 @@
+'use client'
+
+import { Suspense, useEffect, useState } from 'react'
+import Link from 'next/link'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { ChevronLeft, Plus, X, Loader2 } from 'lucide-react'
+
+import { ApiError } from '@/lib/api-error'
+import { updateProfile, type SignedChallengeEvent } from '@/lib/api/auth'
+import { uploadImage } from '@/lib/api/upload'
+import { signNostrEvent } from '@/lib/auth/sign'
+import { getSecretKey } from '@/lib/auth/storage'
+import { useSession } from '@/lib/auth/use-session'
+import { useSessionStore } from '@/store/session-store'
+
+function ProfilePageContent() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  // ?incomplete=1 = the "Complete your shop" entry path from the dashboard
+  // banner. Drives copy variation only — the form behaves the same.
+  const isFirstTime = searchParams.get('incomplete') === '1'
+
+  const { user, isLoading: isSessionLoading } = useSession()
+  const setUser = useSessionStore(s => s.setUser)
+
+  // Auth guard.
+  useEffect(() => {
+    if (!isSessionLoading && !user) {
+      router.push('/signin')
+    }
+  }, [isSessionLoading, user, router])
+
+  // Form state — hydrated from the session user once it loads.
+  const [displayName, setDisplayName] = useState('')
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+  const [avatarState, setAvatarState] = useState<'empty' | 'uploading' | 'uploaded'>('empty')
+  const [location, setLocation] = useState('')
+  const [about, setAbout] = useState('')
+  const [lightningAddress, setLightningAddress] = useState('')
+
+  const [isSaving, setIsSaving] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  // Pre-fill the form from the authenticated user. Re-runs when the
+  // session store changes (e.g., after /api/auth/me hydrate completes).
+  useEffect(() => {
+    if (!user) return
+    setDisplayName(user.displayName ?? '')
+    setAbout(user.about ?? '')
+    setLightningAddress(user.lightningAddr ?? '')
+    if (user.avatar) {
+      setAvatarUrl(user.avatar)
+      setAvatarState('uploaded')
+    }
+    // `location` is in the schema but not yet on the shared User type —
+    // read it via index access so we pick it up once the type is updated.
+    const maybeLocation = (user as unknown as Record<string, unknown>).location
+    if (typeof maybeLocation === 'string') setLocation(maybeLocation)
+  }, [user])
+
+  // Avatar upload — server issues a signed Cloudinary URL, browser POSTs
+  // the file direct to Cloudinary. The file bytes never pass through us.
+  const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    // Reset the input so re-selecting the same file fires a fresh change.
+    e.target.value = ''
+    if (!file) return
+
+    setAvatarState('uploading')
+    setErrorMessage(null)
+    try {
+      const url = await uploadImage(file)
+      setAvatarUrl(url)
+      setAvatarState('uploaded')
+    } catch (err) {
+      setAvatarState(avatarUrl ? 'uploaded' : 'empty')
+      setErrorMessage(
+        err instanceof ApiError
+          ? err.message
+          : 'Upload failed. Check your connection and try again.',
+      )
+    }
+  }
+
+  const handleAvatarRemove = () => {
+    setAvatarUrl(null)
+    setAvatarState('empty')
+  }
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (isSaving || !user) return
+    setIsSaving(true)
+    setErrorMessage(null)
+
+    try {
+      // Build a signed kind 0 Nostr event so the profile mirrors to
+      // public relays. If the unlocked nsec isn't in IndexedDB (storage
+      // cleared / different device), skip the Nostr piece — Postgres
+      // still updates and the user can republish after re-auth.
+      let nostrEvent: SignedChallengeEvent | undefined
+      try {
+        const secretKey = await getSecretKey(user.npub)
+        if (secretKey) {
+          const content = JSON.stringify({
+            name: displayName || undefined,
+            about: about || undefined,
+            picture: avatarUrl || undefined,
+            lud16: lightningAddress || user.lightningAddr || undefined,
+          })
+          const signed = signNostrEvent(
+            {
+              kind: 0,
+              created_at: Math.floor(Date.now() / 1000),
+              tags: [],
+              content,
+            },
+            secretKey,
+          )
+          // VerifiedEvent is structurally a SignedChallengeEvent.
+          nostrEvent = {
+            id: signed.id,
+            pubkey: signed.pubkey,
+            created_at: signed.created_at,
+            kind: signed.kind,
+            tags: signed.tags as string[][],
+            content: signed.content,
+            sig: signed.sig,
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to sign Nostr profile event', err)
+      }
+
+      const { user: updated } = await updateProfile({
+        displayName: displayName || undefined,
+        about: about || undefined,
+        location: location || undefined,
+        avatar: avatarUrl || undefined,
+        // Personal lightningAddr stays out of this slice — it interacts
+        // with the auto-set Bitscy address and needs a dedicated UX.
+        nostrEvent,
+      })
+
+      // Refresh the session store so the dashboard reflects the new
+      // displayName immediately on navigate-back.
+      setUser(updated)
+
+      router.push('/seller')
+    } catch (err) {
+      setErrorMessage(
+        err instanceof ApiError
+          ? err.message || 'Could not save your profile. Try again.'
+          : 'Connection issue. Check your network and try again.',
+      )
+      setIsSaving(false)
+    }
+  }
+
+  // Copy variations by mode
+  const headline = isFirstTime ? 'Tell us about your craft.' : 'Edit your profile.'
+  const subtitle = isFirstTime
+    ? 'A few details so buyers know who you are. You can change these anytime.'
+    : ''
+  const ctaLabel = isFirstTime ? 'Continue to my shop' : 'Save changes'
+  const ctaSaving = isFirstTime ? 'Saving…' : 'Saving…'
+
+  return (
+    <div className="min-h-screen bg-background">
+      {/* Header */}
+      <div className="sticky top-0 z-40 bg-background border-b border-border">
+        <div className="mx-auto max-w-2xl px-5 sm:px-6 lg:px-8 py-4 flex items-center gap-4">
+          <Link
+            href="/seller"
+            className="flex items-center justify-center w-11 h-11 hover:bg-border rounded transition-colors"
+            aria-label="Back to dashboard"
+          >
+            <ChevronLeft className="w-6 h-6 text-foreground" />
+          </Link>
+        </div>
+      </div>
+
+      <form onSubmit={handleSave} className="mx-auto max-w-2xl px-5 sm:px-6 lg:px-8 py-8 pb-24">
+        {/* Title */}
+        <h1 className="font-serif text-4xl sm:text-5xl font-normal text-foreground mb-3">
+          {headline}
+        </h1>
+        {subtitle && (
+          <p className="font-sans text-base text-muted mb-8 max-w-lg">{subtitle}</p>
+        )}
+        {!subtitle && <div className="mb-8" />}
+
+        {/* 1. Profile photo */}
+        <div className="mb-10">
+          <h2 className="font-serif text-xl font-normal mb-1">Profile photo.</h2>
+          <p className="text-sm text-muted mb-5">A photo of you or your work. Optional.</p>
+
+          <div className="flex items-center gap-5">
+            {avatarState === 'empty' && (
+              <label
+                className="w-24 h-24 rounded-full bg-white border border-dashed border-border flex flex-col items-center justify-center hover:bg-border/10 transition-colors shrink-0 cursor-pointer"
+                aria-label="Add profile photo"
+              >
+                <Plus className="w-5 h-5 text-muted mb-1" />
+                <span className="text-xs text-muted">Add</span>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/avif"
+                  onChange={handleAvatarFileChange}
+                  className="sr-only"
+                />
+              </label>
+            )}
+
+            {avatarState === 'uploading' && (
+              <div className="w-24 h-24 rounded-full bg-gray-100 border border-border flex items-center justify-center shrink-0">
+                <Loader2 className="w-5 h-5 text-muted animate-spin" />
+              </div>
+            )}
+
+            {avatarState === 'uploaded' && avatarUrl && (
+              <div className="w-24 h-24 rounded-full relative overflow-hidden shrink-0">
+                <img
+                  src={avatarUrl}
+                  alt="Profile photo"
+                  className="w-full h-full object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={handleAvatarRemove}
+                  className="absolute top-0 right-0 bg-white rounded-full w-7 h-7 flex items-center justify-center shadow-sm hover:bg-gray-50 transition-colors"
+                  aria-label="Remove profile photo"
+                >
+                  <X className="w-4 h-4 text-foreground" />
+                </button>
+              </div>
+            )}
+
+            <div className="text-sm text-muted">
+              <p className="text-foreground font-medium">Bitscy will resize</p>
+              <p>your photo. Square works best.</p>
+            </div>
+          </div>
+        </div>
+
+        {/* 2. Display name */}
+        <div className="mb-8">
+          <h2 className="font-serif text-xl font-normal mb-3">Your name.</h2>
+          <input
+            type="text"
+            value={displayName}
+            onChange={e => setDisplayName(e.target.value)}
+            placeholder="As you'd like buyers to see it"
+            className="w-full px-4 py-3 bg-white rounded border border-border text-base font-normal text-foreground placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary transition-all"
+            style={{ minHeight: '48px', fontSize: '16px' }}
+          />
+          <p className="text-xs text-muted mt-2">
+            This appears on your shop page next to your work.
+          </p>
+        </div>
+
+        {/* 3. Location */}
+        <div className="mb-8">
+          <h2 className="font-serif text-xl font-normal mb-3">Where you&apos;re based.</h2>
+          <input
+            type="text"
+            value={location}
+            onChange={e => setLocation(e.target.value)}
+            placeholder="Lagos, Nigeria"
+            className="w-full px-4 py-3 bg-white rounded border border-border text-base font-normal text-foreground placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary transition-all"
+            style={{ minHeight: '48px', fontSize: '16px' }}
+          />
+          <p className="text-xs text-muted mt-2">
+            City and country. Shown to buyers so they know where pieces ship from.
+          </p>
+        </div>
+
+        {/* 4. About */}
+        <div className="mb-8">
+          <h2 className="font-serif text-xl font-normal mb-3">About your work.</h2>
+          <textarea
+            value={about}
+            onChange={e => setAbout(e.target.value)}
+            placeholder="A sentence or two about what you make and why."
+            className="w-full px-4 py-3 bg-white rounded border border-border text-base font-normal text-foreground placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary transition-all resize-none"
+            rows={4}
+            style={{ fontSize: '16px' }}
+            maxLength={280}
+          />
+          <p className="text-xs text-muted mt-2 tabular-nums">
+            {about.length} / 280
+          </p>
+        </div>
+
+        {/* 5. Lightning address (optional) */}
+        <div className="mb-10">
+          <h2 className="font-serif text-xl font-normal mb-3">Lightning address (optional).</h2>
+          <input
+            type="text"
+            value={lightningAddress}
+            onChange={e => setLightningAddress(e.target.value)}
+            placeholder="you@yourwallet.com"
+            inputMode="email"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="w-full px-4 py-3 bg-white rounded border border-border text-base font-normal text-foreground placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary transition-all"
+            style={{ minHeight: '48px', fontSize: '16px' }}
+          />
+          <p className="text-xs text-muted mt-2">
+            If you have a personal Lightning address, buyers can pay directly to it.
+            You can always withdraw to your bank instead.
+          </p>
+        </div>
+
+        {/* Divider */}
+        <div className="h-px bg-gold mb-8" />
+
+        {/* Inline error */}
+        {errorMessage && (
+          <p
+            role="alert"
+            className="font-sans text-sm text-error mb-4"
+          >
+            {errorMessage}
+          </p>
+        )}
+
+        {/* Save / Continue */}
+        <button
+          type="submit"
+          disabled={isSaving}
+          className="w-full bg-primary text-primary-foreground py-4 px-6 rounded font-sans text-base font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          style={{ minHeight: '56px' }}
+        >
+          {isSaving ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" />
+              {ctaSaving}
+            </>
+          ) : (
+            ctaLabel
+          )}
+        </button>
+
+        {/* Skip (first-time only) OR Cancel */}
+        <div className="text-center mt-4">
+          {isFirstTime ? (
+            <Link
+              href="/seller"
+              className="font-sans text-sm text-muted hover:text-foreground transition-colors"
+            >
+              Skip for now
+            </Link>
+          ) : (
+            <Link
+              href="/seller"
+              className="font-sans text-sm text-muted hover:text-foreground transition-colors"
+            >
+              Cancel
+            </Link>
+          )}
+        </div>
+      </form>
+    </div>
+  )
+}
+
+export default function SellerProfilePage() {
+  return (
+    <Suspense fallback={<div className="bg-background min-h-screen" />}>
+      <ProfilePageContent />
+    </Suspense>
+  )
+}

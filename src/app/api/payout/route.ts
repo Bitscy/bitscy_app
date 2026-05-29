@@ -1,7 +1,7 @@
 /**
  * /api/payout
  *
- * POST — initiate a naira off-ramp payout (mocked Bitnob in v1)
+ * POST — initiate a naira off-ramp payout via real Bitnob sandbox API
  */
 
 import { NextResponse, type NextRequest } from 'next/server';

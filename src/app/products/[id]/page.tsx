@@ -1,349 +1,585 @@
+'use client'
+
+import { Suspense, use, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ChevronLeft } from 'lucide-react'
-import ArtistAvatar from '@/components/artist-avatar'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Check, ChevronLeft, ChevronRight, Copy, Flame, X } from 'lucide-react'
 
-interface MockProduct {
-  id: string
-  title: string
-  artist: string
-  priceNaira: number
-  priceSats: number
-  images: string[]
-  category: string
-  description: string
-  shipsFrom: string
-  inStock: number
+import { ApiError } from '@/lib/api-error'
+import { createOrder } from '@/lib/api/commerce'
+import { getProduct } from '@/lib/api/products'
+import { useSession } from '@/lib/auth/use-session'
+import type { Product, ProductCategory } from '@/types/shared'
+
+// Server uses ₦145M per BTC for the demo rate. Mirror it here so the
+// shipping NGN we compute matches what `satsToNgn` produces server-side.
+// (priceNgnDisplay already arrives pre-formatted; shipping does not.)
+const NGN_PER_BTC = 145_000_000
+const SATS_PER_BTC = 100_000_000
+
+const CATEGORY_LABELS: Record<ProductCategory, string> = {
+  paintings: 'Paintings',
+  jewelry: 'Jewelry',
+  textiles: 'Textiles',
+  leather: 'Leather',
+  pottery: 'Pottery',
+  sculpture: 'Sculpture',
+  prints_digital: 'Prints & Digital',
+  other: 'Other',
 }
 
-// Sample product data - in real app would come from database
-const PRODUCTS: Record<string, MockProduct> = {
-  '1': {
-    id: '1',
-    title: 'Geometric Abstract Composition',
-    artist: 'Adaeze',
-    priceNaira: 45000,
-    priceSats: 125000,
-    images: ['/artwork-1.jpg', '/artwork-1.jpg', '/artwork-1.jpg', '/artwork-1.jpg', '/artwork-1.jpg'],
-    category: 'Paintings',
-    description: `This striking geometric composition explores the intersection of traditional African patterns and contemporary abstract art. The work features bold intersecting shapes in warm earth tones, creating a sense of movement and depth. Hand-rendered with acrylic on stretched canvas.\n\nThe piece measures 60cm × 60cm and is part of Adaeze's ongoing exploration of form, color, and cultural narrative. Each element is carefully considered to create a harmonious balance between structure and spontaneity, inviting the viewer to find their own meaning in the composition.`,
-    shipsFrom: 'Lagos',
-    inStock: 1,
-  },
-  '2': {
-    id: '2',
-    title: 'Indigo Woven Textile',
-    artist: 'Adaeze',
-    priceNaira: 28000,
-    priceSats: 85000,
-    images: ['/artwork-2.jpg', '/artwork-2.jpg', '/artwork-2.jpg'],
-    category: 'Textiles',
-    description: `A hand-woven textile featuring traditional indigo dyeing techniques combined with contemporary geometric patterns. This piece showcases the meticulous craftsmanship of West African textile traditions.\n\nMeasuring 90cm × 120cm, this woven piece can be used as a wall hanging, table runner, or decorative textile. The rich indigo tones develop and deepen with wear, making each piece truly unique and personal to its owner.`,
-    shipsFrom: 'Lagos',
-    inStock: 1,
-  },
-  '3': {
-    id: '3',
-    title: 'Handthrown Ceramic Vessel',
-    artist: 'Adaeze',
-    priceNaira: 35000,
-    priceSats: 95000,
-    images: ['/artwork-3.jpg', '/artwork-3.jpg', '/artwork-3.jpg', '/artwork-3.jpg'],
-    category: 'Ceramics',
-    description: `A sculptural ceramic vessel hand-thrown on the wheel and finished with a subtle earth-tone glaze. This piece celebrates the organic beauty of handmade ceramics, with visible fingerprints and subtle variations that speak to its artisanal creation.\n\nStanding 28cm tall, this vessel works beautifully as a standalone sculptural object or as a functional piece for holding flowers, dried grasses, or treasured objects. The form invites touch and interaction.`,
-    shipsFrom: 'Lagos',
-    inStock: 1,
-  },
-  '4': {
-    id: '4',
-    title: 'Contemporary Color Field',
-    artist: 'Adaeze',
-    priceNaira: 52000,
-    priceSats: 145000,
-    images: ['/artwork-4.jpg', '/artwork-4.jpg', '/artwork-4.jpg', '/artwork-4.jpg'],
-    category: 'Paintings',
-    description: `A bold exploration of color, emotion, and spatial relationships. This large-scale painting features confident blocks of saturated color—coral, indigo, and warm gold—arranged to create visual harmony and tension.\n\nThe 80cm × 100cm canvas invites prolonged looking, revealing new relationships between colors and forms as your perspective shifts. Created with acrylic paint applied in multiple layers, the piece has subtle depth and texture.`,
-    shipsFrom: 'Lagos',
-    inStock: 1,
-  },
-  '5': {
-    id: '5',
-    title: 'Tooled Leather Journal',
-    artist: 'Adaeze',
-    priceNaira: 22000,
-    priceSats: 65000,
-    images: ['/artwork-5.jpg', '/artwork-5.jpg'],
-    category: 'Leather',
-    description: `A hand-tooled leather journal featuring traditional geometric patterns tooled into vegetable-tanned leather. The cover is carefully hand-stitched with traditional techniques, and the interior includes 100 pages of quality cream paper.\n\nMeasuring 15cm × 21cm, this journal is perfect for writing, sketching, or keeping as a beautiful object. The leather will develop a rich patina over time with use, becoming more beautiful and personal to its owner.`,
-    shipsFrom: 'Lagos',
-    inStock: 1,
-  },
-  '6': {
-    id: '6',
-    title: 'Beaded Statement Collar',
-    artist: 'Adaeze',
-    priceNaira: 38000,
-    priceSats: 110000,
-    images: ['/artwork-6.jpg', '/artwork-6.jpg', '/artwork-6.jpg', '/artwork-6.jpg', '/artwork-6.jpg'],
-    category: 'Jewelry',
-    description: `A striking beaded collar featuring hand-selected beads in coral, indigo, and gold arranged in traditional geometric patterns. Each bead is individually hand-strung and knotted for durability and flexibility.\n\nThis piece bridges traditional beadwork with contemporary fashion, making a bold statement whether worn as a collar or displayed as a sculptural object. The flexible design allows it to fit a range of necklines and body sizes.`,
-    shipsFrom: 'Lagos',
-    inStock: 1,
-  },
-  '7': {
-    id: '7',
-    title: 'Bronze Sculptural Form',
-    artist: 'Adaeze',
-    priceNaira: 88000,
-    priceSats: 280000,
-    images: ['/artwork-7.jpg', '/artwork-7.jpg', '/artwork-7.jpg'],
-    category: 'Sculpture',
-    description: `An organic bronze sculpture exploring form, movement, and space. Cast using traditional lost-wax techniques, this piece celebrates the material qualities of bronze while referencing natural forms found in nature.\n\nStanding 35cm tall, this sculpture is meant to be viewed from all angles, revealing new forms and relationships as you move around it. The patina will develop and change subtly over years, adding to its character and presence.`,
-    shipsFrom: 'Lagos',
-    inStock: 1,
-  },
-  '8': {
-    id: '8',
-    title: 'Woodcut Print Series',
-    artist: 'Adaeze',
-    priceNaira: 18000,
-    priceSats: 55000,
-    images: ['/artwork-8.jpg', '/artwork-8.jpg', '/artwork-8.jpg', '/artwork-8.jpg'],
-    category: 'Prints',
-    description: `A limited edition woodcut print featuring bold lines and striking contrast. Each print is hand-pulled from a hand-carved wood block, making each impression unique with subtle variations in ink and pressure.\n\nMeasuring 40cm × 50cm, this print celebrates the traditional craft of relief printing. Signed and numbered, each print is part of an edition of 10, ensuring both accessibility and exclusivity for collectors and art lovers.`,
-    shipsFrom: 'Lagos',
-    inStock: 1,
-  },
+function satsToNgnFormatted(satsStr: string): string {
+  try {
+    const sats = BigInt(satsStr)
+    const ngn = (sats * BigInt(NGN_PER_BTC)) / BigInt(SATS_PER_BTC)
+    return `₦${Number(ngn).toLocaleString('en-NG')}`
+  } catch {
+    return '₦0'
+  }
 }
 
-interface PageProps {
-  params: Promise<{ id: string }>
+function formatSatsCount(satsStr: string): string {
+  try {
+    return Number(BigInt(satsStr)).toLocaleString('en-NG')
+  } catch {
+    return '0'
+  }
 }
 
-export default async function ProductDetailPage({ params }: PageProps) {
-  const { id } = await params
-  const product = PRODUCTS[id]
+function ProductPageContent({ params }: { params: Promise<{ id: string }> }) {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const { id } = use(params)
+  const { user } = useSession()
 
-  if (!product) {
+  // Real fetch state.
+  const [product, setProduct] = useState<Product | null>(null)
+  const [isFetching, setIsFetching] = useState(true)
+  // 'not-found' = 404 from server; 'load-failed' = network / 5xx; null = OK.
+  const [fetchError, setFetchError] = useState<'not-found' | 'load-failed' | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setIsFetching(true)
+    setFetchError(null)
+    getProduct(id)
+      .then(res => {
+        if (!cancelled) setProduct(res.product)
+      })
+      .catch(err => {
+        if (cancelled) return
+        const status =
+          err instanceof ApiError ? err.statusCode : 0
+        setFetchError(status === 404 ? 'not-found' : 'load-failed')
+      })
+      .finally(() => {
+        if (!cancelled) setIsFetching(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [id])
+
+  const [currentImageIndex, setCurrentImageIndex] = useState(0)
+  const [isSticky, setIsSticky] = useState(false)
+  const [buyButtonRef, setBuyButtonRef] = useState<HTMLDivElement | null>(null)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+
+  // ?justPublished=1 is set by /seller/products/new after a successful
+  // publish. Show a one-shot "Your product is live." banner with share
+  // URL + Copy + dashboard / list-another CTAs. Dismissible per-session.
+  const justPublished = searchParams.get('justPublished') === '1'
+  const [bannerVisible, setBannerVisible] = useState(justPublished)
+  const [urlCopied, setUrlCopied] = useState(false)
+
+  // Design-time toggles still work for preview alongside the real states.
+  const isLoading = isFetching || searchParams.get('loading') === '1'
+  const isErrorState =
+    fetchError === 'load-failed' || searchParams.get('error') === '1'
+  const isNotFound = fetchError === 'not-found'
+
+  const shareUrl = product
+    ? typeof window !== 'undefined'
+      ? `${window.location.origin}/products/${product.id}`
+      : `bitscy.com/products/${product.id}`
+    : ''
+
+  const handleCopyShareUrl = () => {
+    if (!shareUrl) return
+    navigator.clipboard.writeText(shareUrl)
+    setUrlCopied(true)
+    setTimeout(() => setUrlCopied(false), 2000)
+  }
+
+  // Handle sticky buy bar on scroll
+  useEffect(() => {
+    const handleScroll = () => {
+      if (buyButtonRef) {
+        const rect = buyButtonRef.getBoundingClientRect()
+        setIsSticky(rect.bottom < 0)
+      }
+    }
+    window.addEventListener('scroll', handleScroll)
+    return () => window.removeEventListener('scroll', handleScroll)
+  }, [buyButtonRef])
+
+  // Buy flow state. `buyError` surfaces server errors (out of stock,
+  // network, etc.) inline above the Buy CTA.
+  const [isBuying, setIsBuying] = useState(false)
+  const [buyError, setBuyError] = useState<string | null>(null)
+
+  const handleBuy = async () => {
+    if (!product || isBuying) return
+
+    // Auth gate. First-time buyers go to /buyer/signup; returning buyers
+    // tap "Already have an account? Sign in" from there. Both flows carry
+    // ?buyProductId so the auth pages auto-create the order and route to
+    // /checkout once the buyer is authenticated — no second Buy click.
+    if (!user) {
+      router.push(`/buyer/signup?buyProductId=${encodeURIComponent(product.id)}`)
+      return
+    }
+
+    setIsBuying(true)
+    setBuyError(null)
+    try {
+      const order = await createOrder({ productId: product.id, quantity: 1 })
+      router.push(`/checkout/${order.id}`)
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'OUT_OF_STOCK') {
+        setBuyError('This piece just sold — it’s no longer available.')
+      } else if (err instanceof ApiError) {
+        setBuyError(err.message || 'Could not create the order. Try again.')
+      } else {
+        setBuyError('Connection issue. Check your network and try again.')
+      }
+      setIsBuying(false)
+    }
+  }
+
+  // Sync the dot indicator with native scroll position. Fires on every
+  // scroll frame; we just round to the nearest slide.
+  const handleCarouselScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget
+    if (el.clientWidth === 0) return
+    const idx = Math.round(el.scrollLeft / el.clientWidth)
+    if (idx !== currentImageIndex) setCurrentImageIndex(idx)
+  }
+
+  // Programmatic navigation (dots, arrows, thumbnails) — scroll the
+  // container to the target slide and let native scroll-snap handle the
+  // animation + snapping.
+  const scrollToImage = (idx: number) => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTo({ left: idx * el.clientWidth, behavior: 'smooth' })
+  }
+
+  const handlePrevImage = () => {
+    if (!product) return
+    scrollToImage((currentImageIndex - 1 + product.images.length) % product.images.length)
+  }
+
+  const handleNextImage = () => {
+    if (!product) return
+    scrollToImage((currentImageIndex + 1) % product.images.length)
+  }
+
+  // LOADING state — skeleton of the populated page
+  if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-bitscy-background">
-        <h1 className="text-2xl font-serif text-bitscy-text">Product not found</h1>
-        <Link href="/" className="mt-4 text-bitscy-primary underline">
-          Back to home
-        </Link>
+      <div className="bg-background min-h-screen text-foreground">
+        <div className="sticky top-0 z-40 bg-background border-b border-border">
+          <div className="px-5 py-3 flex items-center">
+            <button
+              onClick={() => router.back()}
+              className="p-3 -m-3 hover:bg-input rounded transition-colors"
+              aria-label="Go back"
+            >
+              <ChevronLeft className="w-6 h-6 text-foreground" strokeWidth={2} />
+            </button>
+          </div>
+        </div>
+        <div className="lg:flex lg:gap-12 lg:max-w-7xl lg:mx-auto lg:px-10" aria-busy="true">
+          <div className="lg:w-3/5 lg:py-12">
+            <div className="aspect-square bg-input animate-pulse lg:rounded-lg" />
+            <div className="lg:hidden flex justify-center gap-2 mt-4">
+              {[0, 1, 2, 3, 4].map(i => (
+                <div key={i} className="w-2 h-2 rounded-full bg-input animate-pulse" />
+              ))}
+            </div>
+          </div>
+          <div className="px-6 py-8 lg:w-2/5 lg:py-12 lg:px-0 space-y-8">
+            <div className="space-y-3">
+              <div className="h-8 w-3/4 bg-input rounded animate-pulse" />
+              <div className="h-3 w-1/2 bg-input rounded animate-pulse" />
+            </div>
+            <div className="space-y-2">
+              <div className="h-10 w-40 bg-input rounded animate-pulse" />
+              <div className="h-3 w-24 bg-input rounded animate-pulse" />
+            </div>
+            <div className="h-4 w-1/3 bg-input rounded animate-pulse" />
+            <div className="h-14 bg-input rounded animate-pulse" />
+            <div className="h-px bg-input animate-pulse" />
+            <div className="space-y-3">
+              <div className="h-6 w-1/2 bg-input rounded animate-pulse" />
+              <div className="h-3 w-full bg-input rounded animate-pulse" />
+              <div className="h-3 w-full bg-input rounded animate-pulse" />
+              <div className="h-3 w-2/3 bg-input rounded animate-pulse" />
+            </div>
+          </div>
+        </div>
       </div>
     )
   }
 
+  // NOT-FOUND or ERROR — both render the "couldn't find that" UI.
+  // The copy hedges the cause (unlisted / connection drop) since we
+  // don't differentiate to the user.
+  if (isNotFound || isErrorState || !product) {
+    return (
+      <div className="bg-background min-h-screen text-foreground">
+        <div className="sticky top-0 z-40 bg-background border-b border-border">
+          <div className="px-5 py-3 flex items-center">
+            <button
+              onClick={() => router.back()}
+              className="p-3 -m-3 hover:bg-input rounded transition-colors"
+              aria-label="Go back"
+            >
+              <ChevronLeft className="w-6 h-6 text-foreground" strokeWidth={2} />
+            </button>
+          </div>
+        </div>
+        <main className="mx-auto max-w-xl px-5 py-20 text-center">
+          <div
+            className="w-16 h-16 rounded-full border-2 mb-5 mx-auto flex items-center justify-center"
+            style={{ borderColor: '#B85049' }}
+            aria-hidden="true"
+          >
+            <span className="text-error text-2xl">!</span>
+          </div>
+          <h1 className="font-serif text-3xl font-normal mb-2">We couldn&apos;t find that.</h1>
+          <p className="font-sans text-base text-muted mb-6 max-w-sm mx-auto">
+            The piece may have been unlisted, or your connection dropped. Try going back to
+            the marketplace.
+          </p>
+          <Link
+            href="/marketplace"
+            className="inline-block bg-primary text-primary-foreground px-6 py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity"
+          >
+            Back to marketplace
+          </Link>
+        </main>
+      </div>
+    )
+  }
+
+  // POPULATED — derive display values from the real product.
+  const isOwnProduct = !!user && user.id === product.sellerId
+  const isSoldOut = product.stock === 0
+  const sellerName = product.sellerDisplayName ?? product.sellerUsername
+  const priceDisplay = product.priceNgnDisplay || '₦0'
+  const satsDisplay = formatSatsCount(product.priceSats)
+  const shippingDisplay = satsToNgnFormatted(product.shippingSats)
+  const categoryDisplay =
+    CATEGORY_LABELS[product.category] ?? String(product.category)
+
   return (
-    <div className="flex flex-col min-h-screen bg-bitscy-background lg:bg-white">
-      {/* Back Button - Mobile and Desktop */}
-      <div className="lg:hidden fixed top-0 left-0 right-0 z-20 bg-bitscy-background px-5 py-4 flex items-center">
-        <Link
-          href="/"
-          className="flex items-center justify-center w-11 h-11 rounded-lg hover:bg-[#F5EDE0] transition-colors"
-          aria-label="Back"
-        >
-          <ChevronLeft size={24} className="text-bitscy-primary" />
-        </Link>
-      </div>
-
-      {/* Desktop Back Button */}
-      <div className="hidden lg:flex px-10 py-6">
-        <Link
-          href="/"
-          className="flex items-center justify-center w-11 h-11 rounded-lg hover:bg-gray-100 transition-colors"
-          aria-label="Back"
-        >
-          <ChevronLeft size={24} className="text-bitscy-primary" />
-        </Link>
-      </div>
-
-      {/* Mobile Layout */}
-      <main className="lg:hidden flex-1 pt-16">
-        {/* Hero Image - Full Width, Square */}
-        <div className="w-full aspect-square bg-gray-200 overflow-hidden">
-          <img
-            src={product.images[0]}
-            alt={product.title}
-            className="w-full h-full object-cover"
-          />
+    <div className="bg-background min-h-screen text-foreground">
+      {/* Back Arrow Header */}
+      <div className="sticky top-0 z-40 bg-background border-b border-border">
+        <div className="px-5 py-3 flex items-center">
+          <button
+            onClick={() => router.back()}
+            className="p-3 -m-3 hover:bg-input rounded transition-colors"
+            aria-label="Go back"
+          >
+            <ChevronLeft className="w-6 h-6 text-foreground" strokeWidth={2} />
+          </button>
         </div>
+      </div>
 
-        {/* Photo Dots Indicator */}
-        <div className="flex justify-center gap-2 py-4 px-5">
-          {product.images.map((_, index) => (
+      {/* "Your product is live" banner — shown once after publish */}
+      {bannerVisible && (
+        <div className="bg-[#F5EFE3] border-b border-border">
+          <div className="mx-auto max-w-7xl px-5 sm:px-6 lg:px-8 py-4 flex items-start gap-4">
+            <div className="flex-1 min-w-0">
+              <h2 className="font-serif text-xl sm:text-2xl font-normal text-foreground mb-1">
+                Your product is live.
+              </h2>
+              <p className="font-sans text-sm text-muted mb-3">
+                Share the link to bring buyers to this piece.
+              </p>
+              <div className="flex flex-wrap items-center gap-3 mb-4">
+                <div className="inline-flex items-center gap-3 bg-white border border-border px-3 py-1.5 rounded-full">
+                  <span className="font-sans text-xs sm:text-sm text-foreground tabular-nums truncate max-w-[200px] sm:max-w-none">
+                    {shareUrl}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyShareUrl}
+                    className="text-accent hover:opacity-80 transition-opacity font-sans text-xs sm:text-sm font-medium flex items-center gap-1"
+                  >
+                    {urlCopied ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" /> Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" /> Copy
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <Link
+                  href="/seller/products/new"
+                  className="inline-flex items-center justify-center bg-primary text-primary-foreground px-4 py-2 rounded font-sans text-sm font-medium hover:opacity-90 transition-opacity"
+                >
+                  List another piece
+                </Link>
+                <Link
+                  href="/seller"
+                  className="inline-flex items-center justify-center font-sans text-sm text-foreground hover:text-accent transition-colors px-2 py-2"
+                >
+                  Back to dashboard
+                </Link>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setBannerVisible(false)}
+              className="text-muted hover:text-foreground transition-colors p-1 -m-1 shrink-0"
+              aria-label="Dismiss"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="lg:flex lg:gap-12 lg:max-w-7xl lg:mx-auto lg:px-10">
+        {/* IMAGE CAROUSEL SECTION — native horizontal scroll-snap, so a
+            mobile user gets the expected drag-to-scroll gesture. On
+            desktop, arrows and the thumbnail strip drive scroll instead. */}
+        <div className="lg:w-3/5 lg:py-12">
+          <div className="relative w-full bg-input overflow-hidden lg:rounded-lg">
             <div
-              key={index}
-              className={`w-2 h-2 rounded-full transition-colors ${
-                index === 0 ? 'bg-[#D67961]' : 'bg-[#7D6F66]'
-              }`}
-            />
-          ))}
+              ref={scrollRef}
+              onScroll={handleCarouselScroll}
+              className="flex w-full aspect-square overflow-x-auto snap-x snap-mandatory scrollbar-hide"
+              style={{ scrollbarWidth: 'none' }}
+            >
+              {product.images.map((image, idx) => (
+                <img
+                  key={idx}
+                  src={image}
+                  alt={`${product.title} image ${idx + 1}`}
+                  className="w-full h-full shrink-0 object-cover snap-start"
+                />
+              ))}
+            </div>
+
+            {/* Navigation Arrows - Desktop, only when there's more than one image */}
+            {product.images.length > 1 && (
+              <div className="hidden lg:flex absolute inset-0 items-center justify-between px-4 opacity-0 hover:opacity-100 transition-opacity pointer-events-none">
+                <button
+                  onClick={handlePrevImage}
+                  className="bg-white/90 hover:bg-white p-2 rounded transition-colors pointer-events-auto"
+                  aria-label="Previous image"
+                >
+                  <ChevronLeft className="w-6 h-6 text-foreground" strokeWidth={2} />
+                </button>
+                <button
+                  onClick={handleNextImage}
+                  className="bg-white/90 hover:bg-white p-2 rounded transition-colors pointer-events-auto"
+                  aria-label="Next image"
+                >
+                  <ChevronRight className="w-6 h-6 text-foreground" strokeWidth={2} />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Pagination dots — mobile, only when multi-image. The button
+              has generous padding so the tap target meets the 44×44 min
+              while the visual dot stays small. */}
+          {product.images.length > 1 && (
+            <div className="lg:hidden flex justify-center gap-1 mt-2">
+              {product.images.map((_, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => scrollToImage(idx)}
+                  className="p-3"
+                  aria-label={`Go to image ${idx + 1}`}
+                >
+                  <div
+                    className={`w-2 h-2 rounded-full transition-colors ${
+                      idx === currentImageIndex ? 'bg-accent' : 'bg-muted'
+                    }`}
+                  />
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Thumbnail strip — desktop, only when multi-image */}
+          {product.images.length > 1 && (
+            <div className="hidden lg:grid grid-cols-5 gap-2 mt-4">
+              {product.images.map((image, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => scrollToImage(idx)}
+                  className={`aspect-square rounded overflow-hidden border-2 transition-colors ${
+                    idx === currentImageIndex ? 'border-accent' : 'border-border'
+                  }`}
+                >
+                  <img src={image} alt={`Thumbnail ${idx + 1}`} className="w-full h-full object-cover" />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
-        {/* Content Section */}
-        <div className="px-5 pt-4">
-          {/* Product Title */}
-          <h1 className="font-serif text-[28px] text-bitscy-text font-normal leading-tight mb-4">
-            {product.title}
-          </h1>
-
-          {/* Artist Attribution */}
-          <div className="flex items-center gap-3 mb-6">
-            <span className="text-bitscy-muted text-sm font-normal">by</span>
-            <ArtistAvatar />
-            <Link href="/artist/adaeze" className="text-bitscy-primary font-medium text-sm">
-              {product.artist}
-            </Link>
+        {/* PRODUCT INFO SECTION */}
+        <div className="px-6 py-8 lg:w-2/5 lg:py-12 lg:px-0">
+          {/* Title Block */}
+          <div className="mb-6 space-y-2">
+            <h1 className="font-serif text-4xl font-normal leading-tight">{product.title}</h1>
+            <p className="font-sans text-sm text-muted">
+              by{' '}
+              <Link
+                href={`/shop/${product.sellerUsername}`}
+                className="text-accent hover:opacity-80 transition-opacity"
+              >
+                {sellerName}
+              </Link>
+            </p>
           </div>
 
-          {/* Price */}
+          {/* Price Block */}
+          <div className="mb-6 space-y-1">
+            <p className="font-serif text-5xl font-normal text-accent">{priceDisplay}</p>
+            <p className="font-sans text-sm text-muted">{satsDisplay} sats</p>
+          </div>
+
+          {/* Stock / Scarcity Line */}
           <div className="mb-6">
-            <p className="font-serif text-[32px] text-[#D67961] font-normal" style={{ textDecoration: 'none' }}>
-              ₦{product.priceNaira.toLocaleString('en-US')}
-            </p>
-            <p className="text-bitscy-muted text-sm font-normal" style={{ textDecoration: 'none' }}>
-              {product.priceSats.toLocaleString('en-US')} sats
-            </p>
+            {product.stock === 0 ? (
+              <p className="font-sans text-sm text-error font-medium">Sold out</p>
+            ) : product.stock === 1 ? (
+              <div className="flex items-center gap-2 text-sm text-accent font-medium">
+                <Flame className="w-4 h-4" strokeWidth={2} />
+                <span>Last one — once it&apos;s gone, it&apos;s gone</span>
+              </div>
+            ) : (
+              <p className="font-sans text-sm text-muted">{product.stock} available</p>
+            )}
           </div>
 
-          {/* Divider */}
-          <div className="w-full h-px bg-[#E8B43D] mb-6" />
+          {/* Buy Button — hidden for the product's own seller, who can't
+              buy from themselves. Shows a "manage" CTA instead so they
+              still have an action here. */}
+          <div ref={setBuyButtonRef} className="mb-8">
+            {isOwnProduct ? (
+              <Link
+                href={`/seller/products/${product.id}/edit`}
+                className="block w-full text-center py-4 px-6 rounded font-sans text-lg font-medium bg-white border border-border text-foreground hover:bg-input/30 transition-colors"
+              >
+                Manage listing
+              </Link>
+            ) : isSoldOut ? (
+              <button
+                disabled
+                className="w-full py-4 px-6 rounded font-sans text-lg font-medium bg-muted text-muted-foreground cursor-not-allowed"
+              >
+                Sold out
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleBuy}
+                disabled={isBuying}
+                className="block w-full text-center py-4 px-6 rounded font-sans text-lg font-medium bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isBuying ? 'Creating order…' : `Buy ${priceDisplay}`}
+              </button>
+            )}
+            {buyError && (
+              <p role="alert" className="font-sans text-sm text-error mt-3">
+                {buyError}
+              </p>
+            )}
+          </div>
+
+          {/* Gold Divider */}
+          <div className="h-px bg-gold mb-8" />
 
           {/* Description */}
-          <div className="mb-6">
-            {product.description.split('\n\n').map((paragraph, index) => (
-              <p
-                key={index}
-                className="text-bitscy-text text-base leading-[1.6] mb-4 last:mb-0"
-              >
+          <div className="mb-8 space-y-5">
+            <h3 className="font-serif text-2xl font-normal">About this piece</h3>
+            {product.description.split('\n\n').map((paragraph, idx) => (
+              <p key={idx} className="font-sans text-base text-foreground leading-relaxed">
                 {paragraph}
               </p>
             ))}
           </div>
 
-          {/* Metadata Row */}
-          <div className="flex flex-wrap items-center gap-3 mb-24">
-            {/* Category Pill */}
-            <div className="bg-[#D67961] text-white px-3 py-1 rounded-full text-xs font-medium">
-              {product.category}
-            </div>
-            {/* Ships From */}
-            <span className="text-bitscy-muted text-xs font-normal">
-              Ships from {product.shipsFrom}
-            </span>
-            {/* Stock */}
-            <span className="text-bitscy-muted text-xs font-normal">
-              {product.inStock} in stock
-            </span>
-          </div>
-        </div>
-      </main>
-
-      {/* Desktop Layout */}
-      <main className="hidden lg:flex flex-1 px-10">
-        <div className="max-w-6xl mx-auto flex gap-12 w-full py-8">
-          {/* Left Column - Image */}
-          <div className="w-1/2 flex flex-col">
-            {/* Hero Image */}
-            <div className="aspect-square bg-gray-200 overflow-hidden rounded-lg mb-4">
-              <img
-                src={product.images[0]}
-                alt={product.title}
-                className="w-full h-full object-cover"
-              />
-            </div>
-
-            {/* Photo Dots Indicator */}
-            <div className="flex justify-center gap-2">
-              {product.images.map((_, index) => (
-                <div
-                  key={index}
-                  className={`w-2 h-2 rounded-full transition-colors ${
-                    index === 0 ? 'bg-[#D67961]' : 'bg-[#7D6F66]'
-                  }`}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Right Column - Details */}
-          <div className="w-1/2 flex flex-col">
-            {/* Product Title */}
-            <h1 className="font-serif text-[36px] text-bitscy-text font-normal leading-tight mb-6">
-              {product.title}
-            </h1>
-
-            {/* Artist Attribution */}
-            <div className="flex items-center gap-3 mb-6">
-              <span className="text-bitscy-muted text-sm font-normal">by</span>
-              <ArtistAvatar />
-              <Link href="/artist/adaeze" className="text-bitscy-primary font-medium text-sm">
-                {product.artist}
-              </Link>
-            </div>
-
-            {/* Price */}
-            <div className="mb-6">
-              <p className="font-serif text-[36px] text-[#D67961] font-normal" style={{ textDecoration: 'none' }}>
-                ₦{product.priceNaira.toLocaleString('en-US')}
-              </p>
-              <p className="text-bitscy-muted text-sm font-normal" style={{ textDecoration: 'none' }}>
-                {product.priceSats.toLocaleString('en-US')} sats
-              </p>
-            </div>
-
-            {/* Divider */}
-            <div className="w-full h-px bg-[#E8B43D] mb-6" />
-
-            {/* Description */}
-            <div className="mb-6">
-              {product.description.split('\n\n').map((paragraph, index) => (
-                <p
-                  key={index}
-                  className="text-bitscy-text text-base leading-[1.6] mb-4 last:mb-0"
-                >
-                  {paragraph}
-                </p>
-              ))}
-            </div>
-
-            {/* Metadata Row */}
-            <div className="flex flex-wrap items-center gap-3 mb-6">
-              {/* Category Pill */}
-              <div className="bg-[#D67961] text-white px-3 py-1 rounded-full text-xs font-medium">
-                {product.category}
+          {/* Details Strip */}
+          <div className="space-y-4">
+            <div className="flex justify-between items-start">
+              <p className="font-sans text-sm text-muted">Category</p>
+              <div className="bg-accent text-primary-foreground px-3 py-1 rounded text-xs font-medium">
+                {categoryDisplay}
               </div>
-              {/* Ships From */}
-              <span className="text-bitscy-muted text-xs font-normal">
-                Ships from {product.shipsFrom}
-              </span>
-              {/* Stock */}
-              <span className="text-bitscy-muted text-xs font-normal">
-                {product.inStock} in stock
-              </span>
             </div>
 
-            {/* Action Button - Inline on Desktop */}
-            <Link
-              href={`/checkout/order-${product.id}`}
-              className="flex items-center justify-center w-full h-14 bg-[#2D5F5D] text-white font-medium rounded-lg transition-colors hover:bg-[#1F4A48] active:scale-95"
-            >
-              Buy with Lightning
-            </Link>
+            <div className="flex justify-between">
+              <p className="font-sans text-sm text-muted">Shipping</p>
+              <p className="font-sans text-base font-medium text-foreground">{shippingDisplay}</p>
+            </div>
+
+            {product.isDigital && (
+              <div className="flex justify-between">
+                <p className="font-sans text-sm text-muted">Format</p>
+                <p className="font-sans text-base font-medium text-foreground">Digital download</p>
+              </div>
+            )}
           </div>
         </div>
-      </main>
-
-      {/* Fixed Bottom Action Bar - Mobile Only */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#E5DDD0] px-5 py-3">
-        <Link
-          href={`/checkout/order-${product.id}`}
-          className="block w-full h-14 bg-[#2D5F5D] text-white font-medium rounded-lg transition-colors hover:bg-[#1F4A48] active:scale-95 flex items-center justify-center"
-        >
-          Buy with Lightning
-        </Link>
       </div>
+
+      {/* STICKY BOTTOM BUY BAR — mobile, hidden for the product's own seller */}
+      {isSticky && !isOwnProduct && (
+        <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-border px-6 py-4 z-50 animate-in slide-in-from-bottom-2">
+          {isSoldOut ? (
+            <button
+              disabled
+              className="w-full py-3 px-6 rounded font-sans text-base font-medium bg-muted text-muted-foreground cursor-not-allowed"
+            >
+              Sold out
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleBuy}
+              disabled={isBuying}
+              className="block w-full text-center py-3 px-6 rounded font-sans text-base font-medium bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isBuying ? 'Creating order…' : `Buy ${priceDisplay}`}
+            </button>
+          )}
+        </div>
+      )}
     </div>
+  )
+}
+
+export default function ProductPage({ params }: { params: Promise<{ id: string }> }) {
+  return (
+    <Suspense fallback={<div className="bg-background min-h-screen" />}>
+      <ProductPageContent params={params} />
+    </Suspense>
   )
 }

@@ -30,8 +30,21 @@ export const pushSubscribeSchema = z.object({
   }),
 });
 
-export type CreateOrderData = z.infer<typeof createOrderSchema>;
-export type ListOrdersQuery = z.infer<typeof listOrdersQuerySchema>;
-export type ShipOrderData = z.infer<typeof shipOrderSchema>;
-export type PayoutData = z.infer<typeof payoutSchema>;
-export type PushSubscribeData = z.infer<typeof pushSubscribeSchema>;
+export const addBankAccountSchema = z.object({
+  bankName:      z.string().min(1).max(100),
+  accountNumber: z.string().regex(/^\d{10}$/, 'Account number must be exactly 10 digits'),
+  accountName:   z.string().min(1).max(100),
+});
+
+export const activityQuerySchema = z.object({
+  cursor: z.string().optional(),
+  limit:  z.coerce.number().int().positive().max(100).default(20),
+});
+
+export type CreateOrderData    = z.infer<typeof createOrderSchema>;
+export type ListOrdersQuery    = z.infer<typeof listOrdersQuerySchema>;
+export type ShipOrderData      = z.infer<typeof shipOrderSchema>;
+export type PayoutData         = z.infer<typeof payoutSchema>;
+export type PushSubscribeData  = z.infer<typeof pushSubscribeSchema>;
+export type AddBankAccountData = z.infer<typeof addBankAccountSchema>;
+export type ActivityQuery      = z.infer<typeof activityQuerySchema>;
