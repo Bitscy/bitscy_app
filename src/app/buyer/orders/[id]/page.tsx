@@ -1,116 +1,31 @@
 'use client'
 
-import { use, useState } from 'react'
+import { use, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ChevronLeft, Copy, Check, Loader2 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { ChevronLeft, Copy, Check } from 'lucide-react'
 
-type OrderStatus = 'PAID' | 'SHIPPED' | 'DELIVERED' | 'CANCELLED'
+import { ApiError } from '@/lib/api-error'
+import { getBuyerOrder, type BuyerOrderDetail } from '@/lib/api/commerce'
+import { useSession } from '@/lib/auth/use-session'
+import type { OrderStatus } from '@/types/shared'
 
-interface OrderTimeline {
-  paidAt?: string
-  paidRelative?: string
-  shippedAt?: string
-  shippedRelative?: string
-  deliveredAt?: string
-  deliveredRelative?: string
-  cancelledAt?: string
-  cancelledRelative?: string
-}
+// Demo BTC/NGN rate, mirrored from the server, for client-side sats → ₦ conversions.
+const NGN_PER_BTC = 145_000_000n
+const SATS_PER_BTC = 100_000_000n
 
-interface SellerSummary {
-  displayName: string
-  shopUrl: string // slug like "adaeze"
-  initials: string
-}
-
-interface BuyerOrderDetail {
-  id: string
-  product: {
-    slug: string
-    title: string
-    image: string
-    priceNaira: number
+function formatNgnFromSats(satsStr: string): string {
+  try {
+    const sats = BigInt(satsStr)
+    const ngn = (sats * NGN_PER_BTC) / SATS_PER_BTC
+    return `₦${Number(ngn).toLocaleString('en-NG')}`
+  } catch {
+    return '₦0'
   }
-  shippingFee: number
-  seller: SellerSummary
-  status: OrderStatus
-  timeline: OrderTimeline
-}
-
-const ORDERS: Record<string, BuyerOrderDetail> = {
-  'BTS-7K3M-9P2X': {
-    id: 'BTS-7K3M-9P2X',
-    product: {
-      slug: 'indigo-fabric',
-      title: 'Indigo Dyed Fabric',
-      image: '/artwork-2.jpg',
-      priceNaira: 25000,
-    },
-    shippingFee: 3000,
-    seller: { displayName: 'Adaeze Studio', shopUrl: 'adaeze', initials: 'A' },
-    status: 'PAID',
-    timeline: {
-      paidAt: '2026-05-23T14:32:00Z',
-      paidRelative: '2 days ago',
-    },
-  },
-  'BTS-4N8R-2W1Y': {
-    id: 'BTS-4N8R-2W1Y',
-    product: {
-      slug: 'brass-pendant',
-      title: 'Brass Geometric Pendant',
-      image: '/artwork-6.jpg',
-      priceNaira: 45000,
-    },
-    shippingFee: 3500,
-    seller: { displayName: 'Ama Studio', shopUrl: 'ama', initials: 'A' },
-    status: 'SHIPPED',
-    timeline: {
-      paidAt: '2026-05-20T10:00:00Z',
-      paidRelative: '5 days ago',
-      shippedAt: '2026-05-25T09:00:00Z',
-      shippedRelative: 'yesterday',
-    },
-  },
-  'BTS-9X2P-5T6Q': {
-    id: 'BTS-9X2P-5T6Q',
-    product: {
-      slug: 'thrown-vase',
-      title: 'Hand Thrown Vase',
-      image: '/artwork-3.jpg',
-      priceNaira: 85000,
-    },
-    shippingFee: 3000,
-    seller: { displayName: 'Fatima Studio', shopUrl: 'fatima', initials: 'F' },
-    status: 'DELIVERED',
-    timeline: {
-      paidAt: '2026-05-11T16:00:00Z',
-      paidRelative: '2 weeks ago',
-      shippedAt: '2026-05-18T11:00:00Z',
-      shippedRelative: '1 week ago',
-      deliveredAt: '2026-05-22T14:00:00Z',
-      deliveredRelative: '3 days ago',
-    },
-  },
-  'BTS-3F5J-8K2M': {
-    id: 'BTS-3F5J-8K2M',
-    product: {
-      slug: 'leather-journal',
-      title: 'Tooled Leather Journal',
-      image: '/artwork-5.jpg',
-      priceNaira: 22000,
-    },
-    shippingFee: 3000,
-    seller: { displayName: 'Zainab Studio', shopUrl: 'zainab', initials: 'Z' },
-    status: 'CANCELLED',
-    timeline: {
-      cancelledAt: '2026-04-25T12:00:00Z',
-      cancelledRelative: '1 month ago',
-    },
-  },
 }
 
 const STATUS_PILLS: Record<OrderStatus, { bg: string; text: string; label: string }> = {
+  PENDING: { bg: 'bg-input', text: 'text-muted', label: 'Awaiting payment' },
   PAID: { bg: 'bg-primary', text: 'text-primary-foreground', label: 'Paid · Awaiting shipment' },
   SHIPPED: { bg: 'bg-gold', text: 'text-foreground', label: 'Shipped' },
   DELIVERED: { bg: 'bg-success', text: 'text-primary-foreground', label: 'Delivered' },
@@ -120,41 +35,126 @@ const STATUS_PILLS: Record<OrderStatus, { bg: string; text: string; label: strin
 const formatDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
+function relativeTime(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const ms = Date.now() - new Date(iso).getTime()
+  if (ms < 0 || Number.isNaN(ms)) return ''
+  const mins = Math.floor(ms / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 7) return `${days}d ago`
+  const weeks = Math.floor(days / 7)
+  if (weeks < 5) return `${weeks}w ago`
+  return new Date(iso).toLocaleDateString()
+}
+
 export default function BuyerOrderDetailPage({
   params,
 }: {
   params: Promise<{ id: string }>
 }) {
+  const router = useRouter()
   const { id } = use(params)
-  const order = ORDERS[id]
+  const { user, isLoading: isSessionLoading } = useSession()
 
-  const [currentStatus, setCurrentStatus] = useState<OrderStatus | undefined>(order?.status)
-  const [currentTimeline, setCurrentTimeline] = useState<OrderTimeline>(order?.timeline ?? {})
+  useEffect(() => {
+    if (!isSessionLoading && !user) {
+      router.push('/signin')
+    }
+  }, [isSessionLoading, user, router])
+
+  const [order, setOrder] = useState<BuyerOrderDetail | null>(null)
+  const [isFetching, setIsFetching] = useState(true)
+  const [fetchError, setFetchError] = useState<'not_found' | 'other' | null>(null)
   const [refCopied, setRefCopied] = useState(false)
-  const [confirmReceived, setConfirmReceived] = useState(false)
-  const [isReceiving, setIsReceiving] = useState(false)
 
-  if (!order || !currentStatus) {
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    setIsFetching(true)
+    setFetchError(null)
+    getBuyerOrder(id)
+      .then(res => {
+        if (!cancelled) setOrder(res)
+      })
+      .catch(err => {
+        if (cancelled) return
+        if (err instanceof ApiError && err.statusCode === 401) {
+          router.push('/signin')
+          return
+        }
+        if (err instanceof ApiError && (err.statusCode === 404 || err.statusCode === 403)) {
+          // 403 means it exists but isn't yours; from the buyer's perspective
+          // the order is "not yours" in both cases, so render the same view.
+          setFetchError('not_found')
+          return
+        }
+        setFetchError('other')
+      })
+      .finally(() => {
+        if (!cancelled) setIsFetching(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [id, user, router])
+
+  const handleCopyRef = () => {
+    if (!order) return
+    navigator.clipboard.writeText(order.id)
+    setRefCopied(true)
+    setTimeout(() => setRefCopied(false), 2000)
+  }
+
+  // ── Loading / error / not-found shells share the same header ───────────────
+  const BackHeader = (
+    <div className="sticky top-0 z-40 bg-background border-b border-border">
+      <div className="px-5 py-3 flex items-center">
+        <Link
+          href="/buyer/orders"
+          className="p-3 -m-3 hover:bg-input rounded transition-colors inline-flex"
+          aria-label="Back to your orders"
+        >
+          <ChevronLeft className="w-6 h-6 text-foreground" strokeWidth={2} />
+        </Link>
+      </div>
+    </div>
+  )
+
+  // Cover both session hydration AND the order fetch so the screen never has
+  // an empty frame — including the brief window between session resolving and
+  // the redirect to /signin actually taking effect.
+  if (isSessionLoading || isFetching) {
     return (
       <div className="bg-background min-h-screen text-foreground">
-        <div className="sticky top-0 z-40 bg-background border-b border-border">
-          <div className="px-5 py-3 flex items-center">
-            <Link
-              href="/profile"
-              className="p-3 -m-3 hover:bg-input rounded transition-colors inline-flex"
-              aria-label="Back to orders"
-            >
-              <ChevronLeft className="w-6 h-6 text-foreground" strokeWidth={2} />
-            </Link>
+        {BackHeader}
+        <main className="mx-auto max-w-2xl px-5 sm:px-6 lg:px-8 py-6 pb-24" aria-busy="true">
+          <div className="space-y-3 animate-pulse">
+            <div className="h-3 bg-input rounded w-32 mb-1" />
+            <div className="h-5 bg-input rounded w-48" />
+            <div className="h-10 bg-input rounded w-64 mt-6" />
+            <div className="h-32 bg-input rounded mt-6" />
+            <div className="h-24 bg-input rounded" />
           </div>
-        </div>
+        </main>
+      </div>
+    )
+  }
+
+  if (fetchError === 'not_found' || !order) {
+    return (
+      <div className="bg-background min-h-screen text-foreground">
+        {BackHeader}
         <main className="mx-auto max-w-xl px-5 py-20 text-center">
           <h1 className="font-serif text-3xl font-normal mb-2">Order not found.</h1>
           <p className="font-sans text-base text-muted mb-6">
             That order reference isn&apos;t one of yours.
           </p>
           <Link
-            href="/profile"
+            href="/buyer/orders"
             className="inline-block bg-primary text-primary-foreground px-6 py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity"
           >
             Back to your orders
@@ -164,43 +164,41 @@ export default function BuyerOrderDetailPage({
     )
   }
 
-  const pill = STATUS_PILLS[currentStatus]!
-  const total = order.product.priceNaira + order.shippingFee
-
-  const handleCopyRef = () => {
-    navigator.clipboard.writeText(order.id)
-    setRefCopied(true)
-    setTimeout(() => setRefCopied(false), 2000)
+  if (fetchError === 'other') {
+    return (
+      <div className="bg-background min-h-screen text-foreground">
+        {BackHeader}
+        <main className="mx-auto max-w-xl px-5 py-20 text-center">
+          <p className="font-sans text-base text-muted mb-4">
+            We couldn&apos;t load this order.
+          </p>
+          <button
+            onClick={() => router.refresh()}
+            className="inline-block bg-primary text-primary-foreground px-6 py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity"
+          >
+            Try again
+          </button>
+        </main>
+      </div>
+    )
   }
 
-  const handleConfirmReceived = async () => {
-    setIsReceiving(true)
-    await new Promise(r => setTimeout(r, 1000))
-    const nowIso = new Date().toISOString()
-    setCurrentStatus('DELIVERED')
-    setCurrentTimeline(prev => ({
-      ...prev,
-      deliveredAt: nowIso,
-      deliveredRelative: 'just now',
-    }))
-    setConfirmReceived(false)
-    setIsReceiving(false)
-  }
+  const pill = STATUS_PILLS[order.status]!
+  const firstItem = order.items[0]
+  const productTitle = firstItem?.productTitle ?? '(item)'
+  const productImage = firstItem?.productImage ?? ''
+  const productId = firstItem?.productId
+  const itemSubtotalSats = firstItem
+    ? BigInt(firstItem.priceSats) * BigInt(firstItem.quantity)
+    : 0n
+  const sellerDisplayName = order.seller.displayName ?? order.seller.username
+  // The backend returns a fully qualified shopUrl; rebuild a relative path so
+  // links work on every host (localhost, preview, prod) without hard-coding.
+  const sellerShopHref = order.seller.username ? `/shop/${order.seller.username}` : '#'
 
   return (
     <div className="bg-background min-h-screen text-foreground">
-      {/* Back-arrow header */}
-      <div className="sticky top-0 z-40 bg-background border-b border-border">
-        <div className="px-5 py-3 flex items-center">
-          <Link
-            href="/profile"
-            className="p-3 -m-3 hover:bg-input rounded transition-colors inline-flex"
-            aria-label="Back to your orders"
-          >
-            <ChevronLeft className="w-6 h-6 text-foreground" strokeWidth={2} />
-          </Link>
-        </div>
-      </div>
+      {BackHeader}
 
       <main className="mx-auto max-w-2xl px-5 sm:px-6 lg:px-8 py-6 pb-24">
         {/* Reference + status pill row */}
@@ -210,10 +208,10 @@ export default function BuyerOrderDetailPage({
               Order reference
             </p>
             <div className="flex items-center gap-2">
-              <p className="font-sans text-base tabular-nums font-medium">{order.id}</p>
+              <p className="font-sans text-base tabular-nums font-medium break-all">{order.id}</p>
               <button
                 onClick={handleCopyRef}
-                className="text-accent hover:opacity-80 transition-opacity p-1 -m-1"
+                className="text-accent hover:opacity-80 transition-opacity p-1 -m-1 shrink-0"
                 aria-label="Copy reference"
               >
                 {refCopied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
@@ -233,54 +231,49 @@ export default function BuyerOrderDetailPage({
         <section className="mb-8">
           <h2 className="font-serif text-lg font-normal mb-4">Timeline</h2>
           <div className="space-y-3 font-sans text-sm">
-            {currentTimeline.paidAt && (
+            {order.paidAt && (
               <div className="flex gap-3">
                 <div className="w-3 h-3 rounded-full bg-primary mt-1.5 shrink-0" />
                 <div>
                   <p className="text-foreground font-medium">Paid</p>
                   <p className="text-muted text-xs">
-                    {formatDate(currentTimeline.paidAt)}
-                    {currentTimeline.paidRelative ? ` · ${currentTimeline.paidRelative}` : ''}
+                    {formatDate(order.paidAt)} · {relativeTime(order.paidAt)}
                   </p>
                 </div>
               </div>
             )}
-            {currentTimeline.shippedAt && (
+            {order.shippedAt && (
               <div className="flex gap-3">
                 <div className="w-3 h-3 rounded-full bg-primary mt-1.5 shrink-0" />
                 <div>
                   <p className="text-foreground font-medium">Shipped</p>
                   <p className="text-muted text-xs">
-                    {formatDate(currentTimeline.shippedAt)}
-                    {currentTimeline.shippedRelative ? ` · ${currentTimeline.shippedRelative}` : ''}
+                    {formatDate(order.shippedAt)} · {relativeTime(order.shippedAt)}
                   </p>
+                  {order.shippingNote && (
+                    <p className="text-muted text-xs mt-1 italic">&ldquo;{order.shippingNote}&rdquo;</p>
+                  )}
                 </div>
               </div>
             )}
-            {currentTimeline.deliveredAt && (
-              <div className="flex gap-3">
-                <div className="w-3 h-3 rounded-full bg-success mt-1.5 shrink-0" />
-                <div>
-                  <p className="text-foreground font-medium">Delivered</p>
-                  <p className="text-muted text-xs">
-                    {formatDate(currentTimeline.deliveredAt)}
-                    {currentTimeline.deliveredRelative
-                      ? ` · ${currentTimeline.deliveredRelative}`
-                      : ''}
-                  </p>
-                </div>
-              </div>
-            )}
-            {currentTimeline.cancelledAt && (
+            {order.status === 'CANCELLED' && (
               <div className="flex gap-3">
                 <div className="w-3 h-3 rounded-full bg-border mt-1.5 shrink-0" />
                 <div>
                   <p className="text-muted font-medium">Cancelled</p>
                   <p className="text-muted text-xs">
-                    {formatDate(currentTimeline.cancelledAt)}
-                    {currentTimeline.cancelledRelative
-                      ? ` · ${currentTimeline.cancelledRelative}`
-                      : ''}
+                    {formatDate(order.createdAt)} · {relativeTime(order.createdAt)}
+                  </p>
+                </div>
+              </div>
+            )}
+            {order.status === 'PENDING' && (
+              <div className="flex gap-3">
+                <div className="w-3 h-3 rounded-full bg-input mt-1.5 shrink-0" />
+                <div>
+                  <p className="text-muted font-medium">Awaiting payment</p>
+                  <p className="text-muted text-xs">
+                    {formatDate(order.createdAt)} · {relativeTime(order.createdAt)}
                   </p>
                 </div>
               </div>
@@ -291,27 +284,37 @@ export default function BuyerOrderDetailPage({
         {/* Product card */}
         <section className="mb-8">
           <h2 className="font-serif text-lg font-normal mb-4">Item</h2>
-          <Link
-            href={`/products/${order.product.slug}`}
-            className="block bg-white border border-border rounded-lg p-4 flex gap-4 hover:bg-input/30 transition-colors"
-          >
-            <img
-              src={order.product.image}
-              alt={order.product.title}
-              className="w-20 h-20 rounded object-cover shrink-0"
-            />
-            <div className="flex-1 min-w-0">
-              <p className="font-serif text-lg text-foreground mb-1 truncate">
-                {order.product.title}
-              </p>
-              <p className="font-sans text-sm text-accent mb-2">
-                by {order.seller.displayName}
-              </p>
-              <p className="font-sans text-sm text-foreground tabular-nums">
-                ₦{order.product.priceNaira.toLocaleString('en-NG')}
-              </p>
+          {productId ? (
+            <Link
+              href={`/products/${productId}`}
+              className="bg-white border border-border rounded-lg p-4 flex gap-4 hover:bg-input/30 transition-colors"
+            >
+              {productImage ? (
+                <img
+                  src={productImage}
+                  alt={productTitle}
+                  className="w-20 h-20 rounded object-cover shrink-0"
+                />
+              ) : (
+                <div className="w-20 h-20 rounded bg-input shrink-0" />
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="font-serif text-lg text-foreground mb-1 truncate">
+                  {productTitle}
+                </p>
+                <p className="font-sans text-sm text-accent mb-2">
+                  by {sellerDisplayName}
+                </p>
+                <p className="font-sans text-sm text-foreground tabular-nums">
+                  {formatNgnFromSats(firstItem!.priceSats)}
+                </p>
+              </div>
+            </Link>
+          ) : (
+            <div className="bg-white border border-border rounded-lg p-4">
+              <p className="font-sans text-sm text-muted">Item details unavailable.</p>
             </div>
-          </Link>
+          )}
         </section>
 
         {/* Order summary */}
@@ -321,19 +324,19 @@ export default function BuyerOrderDetailPage({
             <div className="flex justify-between">
               <span className="text-muted">Subtotal</span>
               <span className="text-foreground tabular-nums">
-                ₦{order.product.priceNaira.toLocaleString('en-NG')}
+                {formatNgnFromSats(itemSubtotalSats.toString())}
               </span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted">Shipping</span>
               <span className="text-foreground tabular-nums">
-                ₦{order.shippingFee.toLocaleString('en-NG')}
+                {formatNgnFromSats(order.shippingSats)}
               </span>
             </div>
             <div className="border-t border-border pt-2 flex justify-between items-baseline">
               <span className="text-foreground font-medium">You paid</span>
               <span className="font-serif text-xl text-accent tabular-nums">
-                ₦{total.toLocaleString('en-NG')}
+                {order.priceNgnDisplay || formatNgnFromSats(order.totalSats)}
               </span>
             </div>
           </div>
@@ -343,7 +346,7 @@ export default function BuyerOrderDetailPage({
         <section className="mb-8">
           <h2 className="font-serif text-lg font-normal mb-4">Bought from</h2>
           <Link
-            href={`/shop/${order.seller.shopUrl}`}
+            href={sellerShopHref}
             className="bg-white border border-border rounded-lg p-4 flex items-center gap-4 hover:bg-input/30 transition-colors"
           >
             <div
@@ -354,64 +357,12 @@ export default function BuyerOrderDetailPage({
             </div>
             <div className="flex-1 min-w-0">
               <p className="font-sans text-base text-foreground font-medium">
-                {order.seller.displayName}
+                {sellerDisplayName}
               </p>
               <p className="font-sans text-xs text-accent">Visit shop →</p>
             </div>
           </Link>
         </section>
-
-        {/* Mark as received — only on SHIPPED orders */}
-        {currentStatus === 'SHIPPED' && (
-          <>
-            <div className="h-px bg-gold opacity-60 mb-6" />
-
-            {!confirmReceived ? (
-              <div className="space-y-3">
-                <button
-                  onClick={() => setConfirmReceived(true)}
-                  className="w-full bg-primary text-primary-foreground py-4 rounded font-sans font-medium hover:opacity-90 transition-opacity"
-                  style={{ minHeight: '56px' }}
-                >
-                  Mark as received
-                </button>
-                <p className="font-sans text-xs text-muted text-center">
-                  Confirms to {order.seller.displayName} that your piece arrived safely.
-                </p>
-              </div>
-            ) : (
-              <div className="bg-[#F5EFE3] rounded-lg p-4 space-y-4">
-                <p className="font-sans text-sm text-foreground">
-                  Confirm you&apos;ve received this order? {order.seller.displayName} will see the
-                  status update.
-                </p>
-                <div className="flex gap-3">
-                  <button
-                    onClick={handleConfirmReceived}
-                    disabled={isReceiving}
-                    className="flex-1 bg-primary text-primary-foreground py-3 rounded font-sans text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                  >
-                    {isReceiving ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Updating…
-                      </>
-                    ) : (
-                      'Yes, received'
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setConfirmReceived(false)}
-                    disabled={isReceiving}
-                    className="flex-1 bg-transparent text-foreground py-3 rounded font-sans text-sm font-medium hover:bg-border transition-colors disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </>
-        )}
 
         <p className="font-sans text-xs text-muted text-center mt-8">
           Need help with this order? Reach out to Bitscy support.

@@ -102,7 +102,7 @@ function SuccessPageContent({ params }: { params: Promise<{ orderId: string }> }
             Your payment may still have succeeded — check your order history.
           </p>
           <Link
-            href="/profile"
+            href="/buyer/orders"
             className="inline-block bg-primary text-primary-foreground px-6 py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity"
           >
             View your orders

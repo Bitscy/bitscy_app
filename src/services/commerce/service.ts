@@ -658,8 +658,12 @@ export async function getOrderDetailForUser(
   }
 
   const base = mapOrder(order);
-  const { ratePerBtc, recordedAt } = await getBtcNgnRate();
-  const ngnAmount = (BigInt(order.totalSats) * ratePerBtc) / 100_000_000n;
+  // Use the fixed demo rate so order detail NGN matches the product listing
+  // and the seller's balance card (same convention as getSellerBalance).
+  // The live CoinGecko rate is still snapshotted into LedgerEntry.recordedNgnRate
+  // at SALE time for ledger history.
+  const ngnAmount = satsToNgn(BigInt(order.totalSats));
+  const recordedAt = new Date().toISOString();
 
   if (role === 'SELLER' && order.sellerId === userId) {
     return {
