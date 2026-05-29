@@ -54,6 +54,27 @@ export function getOrder(id: string): Promise<Order> {
   return fetcher(`/api/orders/${encodeURIComponent(id)}`);
 }
 
+// The buyer view of an order detail includes a denormalized seller summary
+// and an NGN display value snapshotted at view time. The backend computes
+// `shopUrl` as a fully qualified URL — the UI uses just the username for
+// relative routing, so callers may want to pull it from `seller.username`.
+export interface BuyerOrderDetail extends Order {
+  seller: {
+    id: string;
+    username: string;
+    displayName: string | null;
+    shopUrl: string;
+    initials: string;
+    avatar: string | null;
+  };
+  priceNgnDisplay: string; // pre-formatted "₦12,345"
+  ngnRecordedAt: string;
+}
+
+export function getBuyerOrder(id: string): Promise<BuyerOrderDetail> {
+  return fetcher(`/api/orders/${encodeURIComponent(id)}`);
+}
+
 // ============================================================================
 // Order creation (buyer-side)
 // ============================================================================
