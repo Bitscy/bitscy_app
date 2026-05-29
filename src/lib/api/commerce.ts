@@ -75,6 +75,22 @@ export function getBuyerOrder(id: string): Promise<BuyerOrderDetail> {
   return fetcher(`/api/orders/${encodeURIComponent(id)}`);
 }
 
+// The seller view of an order detail includes the buyer's npub (pseudonymous,
+// public) and the NIP-04 ciphertext of the shipping address — the seller's
+// client decrypts using their nsec. Never exposes the buyer's displayName.
+export interface SellerOrderDetail extends Order {
+  buyer: {
+    npub: string;
+  };
+  encryptedShipping: string | null; // null for digital products or pre-shipping-collection v1 orders
+  priceNgnDisplay: string;
+  ngnRecordedAt: string;
+}
+
+export function getSellerOrder(id: string): Promise<SellerOrderDetail> {
+  return fetcher(`/api/orders/${encodeURIComponent(id)}`);
+}
+
 // ============================================================================
 // Order creation (buyer-side)
 // ============================================================================
