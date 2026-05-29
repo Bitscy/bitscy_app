@@ -11,7 +11,11 @@ import { recordEntry, getBalance } from './ledger';
 import { getBtcNgnRate, satsToNgnLive } from '@/services/pricing/coingecko';
 import * as payoutService from '@/services/payout/service';
 import { publishEvent } from '@/services/nostr/client';
-import { signEventWithSystemKey } from '@/services/nostr/signing';
+import { signEventWithSystemKey, npubToHex } from '@/services/nostr/signing';
+import { encryptToPubkey } from '@/services/nostr/encryption';
+import { publishZapReceipt } from '@/services/nostr/zaps';
+import { publishOrderStateEvent, type OrderStateParams } from '@/services/nostr/order-state';
+import { publishSellerBadge } from '@/services/nostr/badge';
 import { NOSTR_KINDS } from '@/types/nostr';
 import { prisma } from '@/lib/db';
 
@@ -45,9 +49,19 @@ function mapOrder(order: OrderWithRelations): Order {
     status: order.status as OrderStatus,
     shippingNote: order.shippingNote,
     nostrEventId: order.nostrEventId,
+    currentState: order.currentState,
     createdAt: order.createdAt.toISOString(),
     paidAt: order.paidAt?.toISOString() ?? null,
     shippedAt: order.shippedAt?.toISOString() ?? null,
+  };
+}
+
+function toOrderStateParams(order: OrderWithRelations): OrderStateParams {
+  return {
+    id: order.id,
+    nostrEventId: order.nostrEventId,
+    sellerNpub: order.seller.npub,
+    buyerNpub: order.buyer.npub,
   };
 }
 
@@ -191,6 +205,17 @@ export async function markPaid(paymentHash: string): Promise<Order> {
       await repository.decrementProductStock(item.productId, item.quantity);
     }
     await publishOrderNostrEvent(order);
+    void publishZapReceipt({
+      sellerHexPubkey: order.seller.npub,
+      buyerHexPubkey: order.buyer.npub,
+      bolt11: order.invoiceBolt11 ?? '',
+      amountSats: order.totalSats,
+      orderNostrEventId: order.nostrEventId,
+      paidAt: order.paidAt ?? new Date(),
+    }).catch((err) => console.error('NIP-57 zap receipt failed:', err));
+    void publishSellerBadge(order.sellerId).catch((err) =>
+      console.error('NIP-52 seller badge failed:', err),
+    );
     await notifySeller(order);
   }
 
@@ -207,7 +232,13 @@ async function publishOrderNostrEvent(order: OrderWithRelations): Promise<void> 
         priceSats: i.priceSats.toString(),
       })),
       totalSats: order.totalSats.toString(),
-      shippingAddress: order.encryptedShipping ?? null,
+      shippingAddress: order.encryptedShipping
+        ? encryptToPubkey(
+            order.encryptedShipping,
+            process.env.SYSTEM_NSEC!,
+            npubToHex(order.seller.npub),
+          )
+        : null,
       paymentHash: order.paymentHash,
     });
 
@@ -337,6 +368,57 @@ export async function markShipped(
     throw new ApiError('VALIDATION_ERROR', 'Order must be PAID before it can be shipped', 400);
   }
   const updated = await repository.markOrderShipped(orderId, shippingNote);
+  // kind 30050 shipped — system key acts as platform proxy for seller in v1
+  void publishOrderStateEvent('shipped', toOrderStateParams(updated), null, {
+    note: shippingNote,
+  }).then(() => repository.updateOrderCurrentState(orderId, 'shipped'))
+    .catch((err) => console.error('kind 30050 shipped failed:', err));
+  return mapOrder(updated);
+}
+
+export async function markDelivered(orderId: string, buyerId: string): Promise<Order> {
+  const order = await repository.findOrderById(orderId);
+  if (!order) throw new ApiError('NOT_FOUND', 'Order not found', 404);
+  if (order.buyerId !== buyerId) throw new ApiError('FORBIDDEN', 'Only the buyer can confirm delivery', 403);
+  if (order.status !== 'SHIPPED') {
+    throw new ApiError('VALIDATION_ERROR', 'Order must be SHIPPED before it can be marked delivered', 400);
+  }
+  const updated = await repository.markOrderDelivered(orderId);
+  void publishOrderStateEvent('delivered', toOrderStateParams(updated), null)
+    .then(() => repository.updateOrderCurrentState(orderId, 'delivered'))
+    .catch((err) => console.error('kind 30050 delivered failed:', err));
+  return mapOrder(updated);
+}
+
+export async function disputeOrder(
+  orderId: string,
+  buyerId: string,
+  disputeReason?: string,
+): Promise<Order> {
+  const order = await repository.findOrderById(orderId);
+  if (!order) throw new ApiError('NOT_FOUND', 'Order not found', 404);
+  if (order.buyerId !== buyerId) throw new ApiError('FORBIDDEN', 'Only the buyer can raise a dispute', 403);
+  if (order.status !== 'PAID' && order.status !== 'SHIPPED') {
+    throw new ApiError('VALIDATION_ERROR', 'Order must be PAID or SHIPPED to raise a dispute', 400);
+  }
+  // Publish the Nostr dispute event; DB status unchanged until resolution.
+  void publishOrderStateEvent('disputed', toOrderStateParams(order), null, { disputeReason })
+    .then(() => repository.updateOrderCurrentState(orderId, 'disputed'))
+    .catch((err) => console.error('kind 30050 disputed failed:', err));
+  return mapOrder(order);
+}
+
+export async function refundOrder(orderId: string, note?: string): Promise<Order> {
+  const order = await repository.findOrderById(orderId);
+  if (!order) throw new ApiError('NOT_FOUND', 'Order not found', 404);
+  if (order.status === 'CANCELLED' || order.status === 'DELIVERED') {
+    throw new ApiError('VALIDATION_ERROR', 'Order cannot be refunded in its current state', 400);
+  }
+  const updated = await repository.markOrderCancelled(orderId);
+  // System-only signer for refunded per §2.1 design doc
+  void publishOrderStateEvent('refunded', toOrderStateParams(updated), null, { note })
+    .then(() => repository.updateOrderCurrentState(orderId, 'refunded'))
+    .catch((err) => console.error('kind 30050 refunded failed:', err));
   return mapOrder(updated);
 }
 

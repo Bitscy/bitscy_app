@@ -60,6 +60,7 @@ const patchSchema = z.object({
   location: z.string().max(100).optional(),
   lightningAddr: z.string().max(100).optional(),
   nostrEvent: nostrEventSchema.optional(),
+  nostrRelayListEvent: nostrEventSchema.optional(), // NIP-65 kind 10002, client-signed
 });
 
 export async function PATCH(req: NextRequest) {
@@ -72,7 +73,7 @@ export async function PATCH(req: NextRequest) {
       throw new ApiError('VALIDATION_ERROR', parsed.error.issues[0]?.message ?? 'Invalid input', 400);
     }
 
-    const { nostrEvent, ...profileFields } = parsed.data;
+    const { nostrEvent, nostrRelayListEvent, ...profileFields } = parsed.data;
 
     const hasUpdate =
       profileFields.displayName !== undefined ||
@@ -89,6 +90,7 @@ export async function PATCH(req: NextRequest) {
       session.userId,
       profileFields,
       nostrEvent as NostrEvent | undefined,
+      nostrRelayListEvent as NostrEvent | undefined,
     );
 
     return NextResponse.json({ user });

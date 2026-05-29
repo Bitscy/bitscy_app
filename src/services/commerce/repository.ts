@@ -128,6 +128,32 @@ export async function markOrderShipped(
   });
 }
 
+export async function markOrderDelivered(orderId: string): Promise<OrderWithRelations> {
+  return prisma.order.update({
+    where: { id: orderId },
+    data: { status: 'DELIVERED' },
+    include: orderWithRelations,
+  });
+}
+
+export async function markOrderCancelled(orderId: string): Promise<OrderWithRelations> {
+  return prisma.order.update({
+    where: { id: orderId },
+    data: { status: 'CANCELLED' },
+    include: orderWithRelations,
+  });
+}
+
+export async function updateOrderCurrentState(
+  orderId: string,
+  currentState: string,
+): Promise<void> {
+  await prisma.order.update({
+    where: { id: orderId },
+    data: { currentState },
+  });
+}
+
 export async function updateOrderInvoice(
   orderId: string,
   invoiceBolt11: string,

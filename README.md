@@ -38,28 +38,56 @@ The protagonist is **Adaeze** — a talented Nigerian artist who paused her craf
 
 ---
 
-## NIPs (Nostr Implementation Possibilities)
+## Nostr Implementation
 
-Bitscy implements standard NIPs only — no custom event kinds. The marketplace is interoperable with any NIP-15-aware Nostr client.
+Bitscy implements eight standard NIPs and defines four custom event kinds for marketplace state that the existing NIPs don't cover. The marketplace is interoperable with any NIP-15 / NIP-99-aware Nostr client; the custom kinds are documented so other marketplaces can adopt them.
 
-### Standard NIPs used
+### Standard NIPs
 
 | NIP | Title | Where it shows up |
 |---|---|---|
-| [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md) | Basic protocol | Event creation, signing (Schnorr), publishing to relays. Profile metadata (kind 0). |
-| [NIP-04](https://github.com/nostr-protocol/nips/blob/master/04.md) | Encrypted DMs | Buyer encrypts shipping address to seller's pubkey before sending. Bitscy never sees plaintext. |
-| [NIP-06](https://github.com/nostr-protocol/nips/blob/master/06.md) | Mnemonic key derivation | 12-word BIP39 phrase → Nostr secret key via `m/44'/1237'/0'/0/0`. Recovery flow. |
-| [NIP-15](https://github.com/nostr-protocol/nips/blob/master/15.md) | Marketplace | Kinds 30018 (product) and 30019 (order) — parameterized replaceable events with `d` tag = entity id. |
-| [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) | HTTP auth | Login challenge-response. Buyer/seller signs a kind 27235 event to prove control of their key. |
+| [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md) | Basic protocol | Event creation, Schnorr signing, relay publishing |
+| [NIP-06](https://github.com/nostr-protocol/nips/blob/master/06.md) | Mnemonic key derivation | 12-word BIP39 → Nostr secret key (`m/44'/1237'/0'/0/0`) for recovery |
+| [NIP-15](https://github.com/nostr-protocol/nips/blob/master/15.md) | Marketplace | Stalls (kind 30017) and products (kind 30018) |
+| [NIP-19](https://github.com/nostr-protocol/nips/blob/master/19.md) | Bech32 encoding | npub / nsec / note encoding throughout auth and display |
+| [NIP-23](https://github.com/nostr-protocol/nips/blob/master/23.md) | Long-form content | Seller bios published as kind 30023 articles |
+| [NIP-44](https://github.com/nostr-protocol/nips/blob/master/44.md) | Versioned encryption (v2) | Buyer shipping address encrypted to seller's pubkey. Replaces NIP-04, which has known cryptographic weaknesses. |
+| [NIP-57](https://github.com/nostr-protocol/nips/blob/master/57.md) | Lightning Zaps | Zap receipts (kind 9735) published on every payment settlement; seller `lud16` in kind 0 profile metadata |
+| [NIP-65](https://github.com/nostr-protocol/nips/blob/master/65.md) | Relay list metadata | Each user publishes kind 10002 with their preferred relays |
+| [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) | HTTP auth | Login challenge-response via signed kind 27235 events |
+| [NIP-99](https://github.com/nostr-protocol/nips/blob/master/99.md) | Classified listings | Products dual-published as kind 30402 for ecosystem interop |
 
-### Event kinds in use
+### Custom event kinds (Bitscy-specific)
 
-| Kind | Purpose | Where it's built |
+NIP-15 and NIP-99 define stalls, products, and listings — but leave post-listing lifecycle undefined: order state transitions, reviews, seller reputation, and stall operational status. Bitscy extends the protocol with four parameterized-replaceable event kinds in the unassigned `30050`–`30053` range. Kinds `30054`–`30059` are reserved for future use.
+
+| Kind | Name | Description | Signer |
+|---|---|---|---|
+| `30050` | `order:state` | Current state of an order (`shipped` / `delivered` / `disputed` / `refunded`). References the order receipt via `e` tag. Latest state wins (parameterized-replaceable on order id). | Seller / Buyer / System |
+| `30051` | `product:review` | Buyer feedback on a completed order. 1–5 star rating in tag; markdown body in content. References the order via `e` tag, the product via `a` tag. Updatable once per buyer per order. | Buyer |
+| `30052` | `seller:badge` | Bitscy-issued attestation. Carries `firstSaleAt` and `totalSales` — auto-issued from the ledger on first sale, auto-updated on each subsequent sale. No manual ops process. | System |
+| `30053` | `stall:status` | Lightweight operational overlay on a stall (`open` / `vacation` / `closed`) without re-publishing the full stall definition. | Seller |
+
+Full spec, schemas, examples, and rationale: [`docs/bitscy-custom-nips.md`](docs/bitscy-custom-nips.md).
+
+### Event kinds in use (full list)
+
+| Kind | Type | Purpose |
 |---|---|---|
-| `0` | User profile metadata (name, about, picture, lud16) | `src/services/nostr/events.ts` — `buildProfileEventTemplate` |
-| `27235` | Login challenge signature (NIP-98 HTTP Auth) | `src/lib/auth/sign.ts` — `signChallenge` |
-| `30018` | Product listing (NIP-15, parameterized replaceable, `d` = product id) | `src/services/nostr/events.ts` — `buildProductEventTemplate` |
-| `30019` | Order event (NIP-15, content is NIP-04 encrypted shipping) | Commerce service on order settlement |
+| `0` | Replaceable | User profile metadata (includes `lud16` for zaps) |
+| `9735` | Regular | Lightning zap receipts (NIP-57) |
+| `10002` | Replaceable | User relay list (NIP-65) |
+| `27235` | Regular | HTTP auth challenge signature (NIP-98) |
+| `30017` | Param. replaceable | Marketplace stalls (NIP-15) |
+| `30018` | Param. replaceable | Product listings (NIP-15) |
+| `30019` | Param. replaceable | Order receipts (NIP-15) |
+| `30023` | Param. replaceable | Long-form seller bios (NIP-23) |
+| `30050` | Param. replaceable | Bitscy order:state (custom) |
+| `30051` | Param. replaceable | Bitscy product:review (custom) |
+| `30052` | Param. replaceable | Bitscy seller:badge (custom) |
+| `30053` | Param. replaceable | Bitscy stall:status (custom) |
+| `30402` | Param. replaceable | Classified listings (NIP-99) |
+
 
 ### Default relays
 
@@ -158,14 +186,16 @@ Four layers, top to bottom.
 ### Order state machine
 
 ```
-PENDING ──invoice settled──▶ PAID ──seller marks shipped──▶ SHIPPED
-   │                          │
-   │                          └──buyer confirms (v2)──▶ DELIVERED
-   │
-   └──invoice expires / buyer abandons──▶ CANCELLED
+PENDING ──invoice settled──▶ PAID ──seller marks shipped──▶ SHIPPED ──buyer confirms──▶ DELIVERED
+   │                          │                               │
+   │                          │                               └──buyer disputes──▶ (disputed Nostr event)
+   │                          │                                                         │
+   │                          └──invoice expires / buyer abandons──▶ CANCELLED ◀──refund issued──┘
 ```
 
 Atomic updates (`UPDATE … WHERE status = 'PENDING'`) handle the race between the Breez SDK `paymentSucceeded` event and the frontend polling `/api/lightning/verify`.
+
+Each state transition publishes a kind `30050` Nostr event so the order lifecycle is verifiable on public relays independently of the Bitscy API.
 
 ### Authoritative spec
 
@@ -178,7 +208,7 @@ The complete end-to-end architecture lives in [`Bitscy_Integration_Flow.md`](Bit
 ```
 bitscy/
 ├── prisma/
-│   └── schema.prisma                  # User, Product, Order, LedgerEntry, Payout, BankAccount, PendingPayment, PushSubscription
+│   └── schema.prisma                  # User, Product, Order, Review, LedgerEntry, Payout, BankAccount, PendingPayment, PushSubscription
 ├── public/
 │   ├── manifest.json                  # PWA manifest
 │   ├── icons/                         # Home-screen icons
@@ -208,12 +238,13 @@ bitscy/
 │   │   └── currency.ts                # Sats ↔ NGN, demo rate
 │   ├── services/                      # Domain logic — backend only
 │   │   ├── auth/                      # Slug derivation, signup, login-with-signed-challenge
-│   │   ├── catalog/                   # Products, seller storefront, repository
+│   │   ├── catalog/                   # Products, storefront, reviews, badges, repository
 │   │   ├── commerce/                  # Orders, ledger, pending-payments, state machine
 │   │   ├── lightning/                 # Breez SDK wrapper (platform wallet)
-│   │   ├── nostr/                     # publisher, signing, events, client (SimplePool)
+│   │   ├── nostr/                     # events, signing, publishing, encryption (NIP-44),
+│   │   │                              #   zaps, reviews, badge, order-state, stall helpers
 │   │   ├── payout/                    # Bitnob sandbox client
-│   │   └── pricing/                   # CoinGecko BTC/NGN rate
+│   │   └── pricing/                   # CoinGecko BTC/NGN rate (DEMO_BTC_NGN_RATE fallback)
 │   ├── store/                         # Zustand stores (session, …)
 │   ├── types/                         # Shared TS types (single source of truth)
 │   ├── validators/                    # Zod schemas for every API boundary
@@ -263,17 +294,26 @@ bitscy/
 | `/api/auth/signup` | POST | Catalog | Create account (client-side-crypto blob) |
 | `/api/auth/challenge` | POST | Catalog | Issue login challenge (anti-enumeration) |
 | `/api/auth/login` | POST | Catalog | Verify signed challenge → session cookie |
-| `/api/auth/me` | GET / PATCH | Catalog | Read or update authenticated user |
+| `/api/auth/me` | GET / PATCH | Catalog | Read or update authenticated user (accepts `nostrRelayListEvent` for NIP-65) |
+| `/api/auth/me/long-bio` | PATCH | Catalog | Save seller long-form bio → publishes kind 30023 |
 | `/api/auth/logout` | POST | Catalog | Clear session |
 | `/api/products` | GET / POST | Catalog | List + create products |
 | `/api/products/[id]` | GET / PATCH / DELETE | Catalog | Read, update, soft-delete |
-| `/api/shop/[username]` | GET | Catalog | Public seller storefront |
+| `/api/shop/[username]` | GET | Catalog | Public seller storefront (includes `stallStatus`) |
+| `/api/shop/[username]/about` | GET | Catalog | Seller long-form bio + NIP-23 metadata |
+| `/api/shop/[username]/reviews` | GET | Catalog | Aggregated reviews `{ averageRating, count, reviews[] }` |
+| `/api/shop/[username]/badge` | GET | Catalog | Seller badge `{ firstSaleAt, totalSales }` (kind 30052) |
+| `/api/seller/stall/status` | PATCH | Catalog | Set stall status → publishes kind 30053 |
 | `/api/upload` | POST | Catalog | Cloudinary signed-upload params |
 | `/api/nostr/publish` | POST | Catalog | Publish a pre-signed event to relays |
 | `/api/nostr/profile/[npub]` | GET | Catalog | Fetch kind-0 profile (cached) |
 | `/api/orders` | GET / POST | Commerce | List + create orders (returns BOLT-11) |
 | `/api/orders/[id]` | GET | Commerce | Role-differentiated order detail |
-| `/api/orders/[id]/ship` | PATCH | Commerce | Seller marks order shipped |
+| `/api/orders/[id]/review` | POST | Commerce + Catalog | Buyer posts review → publishes kind 30051 |
+| `/api/orders/[id]/ship` | PATCH | Commerce | Seller marks shipped → publishes kind 30050 `shipped` |
+| `/api/orders/[id]/deliver` | PATCH | Commerce | Buyer confirms receipt → publishes kind 30050 `delivered` |
+| `/api/orders/[id]/dispute` | PATCH | Commerce | Buyer raises dispute → publishes kind 30050 `disputed` |
+| `/api/orders/[id]/refund` | POST | Commerce | Seller requests refund → system publishes kind 30050 `refunded` |
 | `/api/orders/[id]/retry` | POST | Commerce | New invoice for an expired order |
 | `/api/lightning/verify/[paymentHash]` | GET | Commerce | Frontend polling endpoint |
 | `/api/wallet/balance` | GET | Commerce | Seller's current sats balance |
@@ -300,7 +340,7 @@ bitscy/
 3. List a product: title, description, up to 5 photos, naira price, category. Photos upload directly to Cloudinary; the listing publishes to Nostr in the same request.
 4. Share `bitscy.com/shop/<your-slug>` with buyers.
 5. When a sale lands, the dashboard updates instantly: balance, total earned, recent orders.
-6. Decrypt the buyer's shipping address (only you can — NIP-04), ship the piece, mark as shipped.
+6. Decrypt the buyer's shipping address (only you can — NIP-44 v2 encrypted to your pubkey), ship the piece, mark as shipped.
 7. Withdraw to your Nigerian bank account: pick a saved bank, enter an amount, confirm. Bitscy routes the sats through Bitnob's sandbox; NGN reaches the bank in production.
 
 ### For buyers

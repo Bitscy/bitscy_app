@@ -22,7 +22,10 @@ model User {
   displayName   String?
   avatar        String?
   about         String?
+  longBio       String?  @db.Text // NIP-23 long-form seller bio (markdown)
   location      String?  // e.g., "Lagos, Nigeria" — shown on storefront
+  stallStatus   String   @default("open") // kind 30053: "open" | "vacation" | "closed"
+  stallStatusMessage String? // optional message shown to buyers when not open
   lightningAddr String?  @unique // e.g., "adaeze@bitscy.com"
   role          UserRole @default(BUYER)
   closedAt      DateTime? // non-null = soft shop closure; null = open
@@ -102,6 +105,9 @@ model Order {
   // Nostr backref — the kind 30019 event ID
   nostrEventId String? @unique
 
+  // kind 30050 state mirror — updated by Commerce on each state transition
+  currentState String @default("pending")
+
   createdAt DateTime  @default(now())
   paidAt    DateTime?
   shippedAt DateTime?
@@ -150,6 +156,23 @@ model Payout {
   completedAt   DateTime?
 
   @@index([userId, createdAt])
+}
+
+// Mirrors kind 30051 Nostr review events for fast DB reads.
+// Parameterized-replaceable by orderId — one review per buyer per order.
+model Review {
+  id           String   @id @default(cuid())
+  orderId      String   @unique
+  buyerId      String
+  sellerId     String
+  rating       Int      // 1–5
+  content      String   @db.Text
+  nostrEventId String?  @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([sellerId, createdAt])
+  @@index([buyerId])
 }
 
 model PushSubscription {
