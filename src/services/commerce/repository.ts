@@ -210,6 +210,11 @@ export async function listBankAccountsByUser(userId: string) {
   return prisma.bankAccount.findMany({ where: { userId }, orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }] });
 }
 
+export async function listBankAccountsByIds(ids: string[]) {
+  if (ids.length === 0) return [];
+  return prisma.bankAccount.findMany({ where: { id: { in: ids } } });
+}
+
 export async function createBankAccount(data: {
   userId: string;
   bankName: string;
