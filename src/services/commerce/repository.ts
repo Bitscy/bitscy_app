@@ -1,5 +1,6 @@
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
+import { generateOrderId } from './id';
 
 /**
  * Commerce repository — DB access layer.
@@ -82,10 +83,33 @@ export async function listOrdersBySeller(
 }
 
 export async function createOrder(data: Prisma.OrderCreateInput): Promise<OrderWithRelations> {
-  return prisma.order.create({
-    data,
-    include: orderWithRelations,
-  });
+  // Generate the user-visible BTS-XXXX-XXXX ID and retry on the (vanishingly
+  // rare) collision. ~1.1 trillion keyspace means we essentially never hit
+  // P2002 on Order.id, but the retry path keeps the contract honest. At the
+  // moment createOrder runs, paymentHash isn't set yet — so any P2002 here
+  // is the id field.
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const id = generateOrderId();
+    try {
+      return await prisma.order.create({
+        data: { ...data, id },
+        include: orderWithRelations,
+      });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002' &&
+        attempt < MAX_ATTEMPTS
+      ) {
+        // Try again with a fresh ID.
+        continue;
+      }
+      throw err;
+    }
+  }
+  // Unreachable — the loop above always either returns or throws.
+  throw new Error('createOrder: exhausted retries without resolution');
 }
 
 /**
