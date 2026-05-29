@@ -598,17 +598,30 @@ export async function getPayoutHistory(
 ) {
   const { items, nextCursor } = await repository.listPayoutsByUser(sellerId, cursor, limit);
 
-  const mapped = items.map((p) => ({
-    id: p.id,
-    status: p.status,
-    amountSats: p.amountSats.toString(),
-    amountNgn: p.amountNgn.toString(),
-    bankAccountId: p.bankAccountId,
-    externalId: p.externalId,
-    failureReason: p.failureReason ?? null,
-    createdAt: p.createdAt.toISOString(),
-    completedAt: p.completedAt?.toISOString() ?? null,
-  }));
+  // Join in bank details so the history page can render
+  // "₦42,300 to GTBank ****1234" without a second client-side fetch.
+  // The Payout model doesn't declare a Prisma relation to BankAccount in v1,
+  // so we fetch them in a single batched query and map by id.
+  const bankAccountIds = Array.from(new Set(items.map((p) => p.bankAccountId)));
+  const banks = await repository.listBankAccountsByIds(bankAccountIds);
+  const byId = new Map(banks.map((b) => [b.id, b]));
+
+  const mapped = items.map((p) => {
+    const bank = byId.get(p.bankAccountId);
+    return {
+      id: p.id,
+      status: p.status,
+      amountSats: p.amountSats.toString(),
+      amountNgn: p.amountNgn.toString(),
+      bankAccountId: p.bankAccountId,
+      bankName: bank?.bankName ?? null,
+      accountNumberMasked: bank ? maskAccountNumber(bank.accountNumber) : null,
+      externalId: p.externalId,
+      failureReason: p.failureReason ?? null,
+      createdAt: p.createdAt.toISOString(),
+      completedAt: p.completedAt?.toISOString() ?? null,
+    };
+  });
 
   return { items: mapped, nextCursor };
 }
