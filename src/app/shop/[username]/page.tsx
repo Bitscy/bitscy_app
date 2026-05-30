@@ -37,6 +37,61 @@ function initialsFor(name: string | null, fallback: string): string {
   return (source.charAt(0) || '?').toUpperCase()
 }
 
+interface StallStatusBannerProps {
+  status: string // "open" | "vacation" | "closed" — caller already filtered out "open"
+  message: string | null
+  displayName: string
+}
+
+function StallStatusBanner({ status, message, displayName }: StallStatusBannerProps) {
+  // vacation — warm saffron / gold for "back soon", not alarming
+  if (status === 'vacation') {
+    return (
+      <div
+        role="status"
+        className="rounded-lg border px-4 py-3 sm:py-4 flex items-start gap-3"
+        style={{ backgroundColor: 'rgba(232, 180, 61, 0.12)', borderColor: '#E8B43D' }}
+      >
+        <span aria-hidden="true" className="font-serif text-xl leading-none mt-0.5">·</span>
+        <div className="flex-1 min-w-0">
+          <p className="font-sans text-sm sm:text-base font-medium text-foreground">
+            {displayName} is on a short break.
+          </p>
+          {message && (
+            <p className="font-sans text-sm text-foreground/80 mt-1">{message}</p>
+          )}
+          <p className="font-sans text-xs text-muted mt-1">
+            You can still browse the catalog. New orders are paused until the shop reopens.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  // closed — muted red. Stronger signal. Buyers shouldn't expect orders to be filled.
+  return (
+    <div
+      role="status"
+      className="rounded-lg border px-4 py-3 sm:py-4 flex items-start gap-3"
+      style={{ backgroundColor: 'rgba(184, 80, 73, 0.10)', borderColor: '#B85049' }}
+    >
+      <span aria-hidden="true" className="font-serif text-xl leading-none mt-0.5 text-error">·</span>
+      <div className="flex-1 min-w-0">
+        <p className="font-sans text-sm sm:text-base font-medium text-error">
+          This shop is currently closed.
+        </p>
+        {message ? (
+          <p className="font-sans text-sm text-foreground/80 mt-1">{message}</p>
+        ) : (
+          <p className="font-sans text-sm text-foreground/80 mt-1">
+            {displayName} isn&apos;t taking new orders right now.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function ShopPage({ params }: { params: Promise<{ username: string }> }) {
   const router = useRouter()
   const { username } = use(params)
@@ -250,13 +305,20 @@ export default function ShopPage({ params }: { params: Promise<{ username: strin
         </div>
       </section>
 
-      {/* HOOK: Feature 3 — Stall status banner goes here, between hero and
-          divider. Render only when seller.stallStatus !== 'open':
-            vacation → yellow banner with seller.stallStatusMessage
-            closed   → red banner, "This shop is currently closed"
-          When closed, also hide the "Buy" affordance on each product card
-          below (already none in this scaffold — they're plain Links to the
-          product detail page where the real Buy button lives). */}
+      {/* Stall status banner — only shown when not open. kind 30053 on
+          Nostr; seller.stallStatus + seller.stallStatusMessage carry it
+          here from the storefront API. Hidden entirely on "open". */}
+      {seller.stallStatus !== 'open' && (
+        <section className="px-5 sm:px-8 pb-6">
+          <div className="max-w-3xl mx-auto">
+            <StallStatusBanner
+              status={seller.stallStatus}
+              message={seller.stallStatusMessage}
+              displayName={displayName}
+            />
+          </div>
+        </section>
+      )}
 
       {/* Gold divider */}
       <div className="max-w-3xl mx-auto px-5 sm:px-8">
@@ -280,12 +342,26 @@ export default function ShopPage({ params }: { params: Promise<{ username: strin
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                 {products.map(product => {
                   const cover = product.images?.[0] ?? ''
+                  // When the shop is closed, render the card as a static,
+                  // dimmed div instead of a Link — buyers can still see the
+                  // catalog, just can't tap into a Buy flow that wouldn't
+                  // be honored on the product detail page anyway.
+                  const isClosed = seller.stallStatus === 'closed'
+                  const CardTag = isClosed ? 'div' : Link
+                  const cardProps = isClosed
+                    ? {
+                        className:
+                          'bg-white rounded-lg overflow-hidden shadow-sm block opacity-60 cursor-not-allowed',
+                        'aria-disabled': true,
+                      }
+                    : {
+                        href: `/products/${product.id}`,
+                        className:
+                          'bg-white rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow active:scale-[0.98] block',
+                      }
                   return (
-                    <Link
-                      key={product.id}
-                      href={`/products/${product.id}`}
-                      className="bg-white rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow active:scale-[0.98] block"
-                    >
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    <CardTag key={product.id} {...(cardProps as any)}>
                       <div className="w-full aspect-square bg-input overflow-hidden">
                         {cover ? (
                           <img
@@ -306,7 +382,7 @@ export default function ShopPage({ params }: { params: Promise<{ username: strin
                           {formatSats(product.priceSats)}
                         </p>
                       </div>
-                    </Link>
+                    </CardTag>
                   )
                 })}
               </div>
