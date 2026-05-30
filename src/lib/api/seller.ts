@@ -1,0 +1,56 @@
+/**
+ * Typed wrappers around seller-specific endpoints that don't belong in
+ * commerce.ts (orders/lightning) or payout.ts (bank accounts).
+ *
+ * Right now: stall status. As we wire more Nostr-publishing seller
+ * actions (long bio, etc.) they land here too.
+ */
+
+import { fetcher, patchFetcher } from '@/lib/fetcher';
+
+// ============================================================================
+// Stall status (kind 30053)
+// ============================================================================
+
+export type StallStatus = 'open' | 'vacation' | 'closed';
+
+export interface StallStatusInput {
+  status: StallStatus;
+  /** Optional message shown to buyers when status is vacation/closed. */
+  message?: string;
+  /** Required: server decrypts the seller's nsec with this to sign the kind 30053. */
+  password: string;
+}
+
+export interface StallStatusResponse {
+  stallStatus: StallStatus;
+  stallStatusMessage: string | null;
+  nostrEventId: string;
+}
+
+export function updateStallStatus(input: StallStatusInput): Promise<StallStatusResponse> {
+  return patchFetcher('/api/seller/stall/status', input);
+}
+
+// ============================================================================
+// Storefront read — pre-seeding the seller's own settings form
+// ============================================================================
+
+export interface ShopCurrentStatus {
+  stallStatus: StallStatus;
+  stallStatusMessage: string | null;
+}
+
+/**
+ * The seller may need to read their own current stall status to pre-fill
+ * the settings form. Re-uses /api/shop/<username>, which always exposes
+ * stallStatus/stallStatusMessage in the seller block.
+ */
+export function getOwnStallStatus(username: string): Promise<ShopCurrentStatus> {
+  return fetcher<{ seller: ShopCurrentStatus }>(
+    `/api/shop/${encodeURIComponent(username)}`,
+  ).then(r => ({
+    stallStatus: r.seller.stallStatus,
+    stallStatusMessage: r.seller.stallStatusMessage,
+  }));
+}

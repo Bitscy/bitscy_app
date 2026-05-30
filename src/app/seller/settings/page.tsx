@@ -1,9 +1,17 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ChevronLeft, ChevronDown, ChevronUp, Eye, EyeOff, Copy, Check, Loader2 } from 'lucide-react'
+
+import { ApiError } from '@/lib/api-error'
+import {
+  getOwnStallStatus,
+  updateStallStatus,
+  type StallStatus,
+} from '@/lib/api/seller'
+import { useSession } from '@/lib/auth/use-session'
 
 const SELLER = {
   username: 'adaeze',
@@ -46,6 +54,64 @@ export default function SellerSettingsPage() {
   // Close shop destructive
   const [closeOpen, setCloseOpen] = useState(false)
   const [closing, setClosing] = useState(false)
+
+  // ── Shop status (kind 30053) ─────────────────────────────────────────────
+  const { user } = useSession()
+  const [stallStatus, setStallStatus] = useState<StallStatus>('open')
+  const [stallMessage, setStallMessage] = useState('')
+  const [stallPassword, setStallPassword] = useState('')
+  const [stallShowPassword, setStallShowPassword] = useState(false)
+  const [stallSubmitting, setStallSubmitting] = useState(false)
+  const [stallError, setStallError] = useState<string | null>(null)
+  const [stallSaved, setStallSaved] = useState(false)
+
+  // Seed the form with the seller's current status so the radio reflects
+  // what's actually live on Nostr today. Silent on failure — the form
+  // still works, it just defaults to "open".
+  useEffect(() => {
+    if (!user?.username) return
+    let cancelled = false
+    getOwnStallStatus(user.username)
+      .then(current => {
+        if (cancelled) return
+        setStallStatus(current.stallStatus)
+        setStallMessage(current.stallStatusMessage ?? '')
+      })
+      .catch(() => {
+        // Defaults are fine.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [user?.username])
+
+  const handleSubmitStall = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (stallSubmitting || !stallPassword) return
+    setStallSubmitting(true)
+    setStallError(null)
+    setStallSaved(false)
+    try {
+      const res = await updateStallStatus({
+        status: stallStatus,
+        message: stallMessage.trim() || undefined,
+        password: stallPassword,
+      })
+      setStallStatus(res.stallStatus)
+      setStallMessage(res.stallStatusMessage ?? '')
+      setStallPassword('')
+      setStallSaved(true)
+      setTimeout(() => setStallSaved(false), 4000)
+    } catch (err) {
+      setStallError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not update status. Check your password and try again.',
+      )
+    } finally {
+      setStallSubmitting(false)
+    }
+  }
 
   const handleSubmitPassword = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -141,6 +207,170 @@ export default function SellerSettingsPage() {
           <p className="font-sans text-xs text-muted mt-3">
             Your username is your shop URL slug. It can&apos;t be changed.
           </p>
+        </section>
+
+        {/* SHOP STATUS — kind 30053 published when the seller saves. */}
+        <section className="mb-10">
+          <h2 className="font-serif text-xl font-normal mb-4">Shop status</h2>
+          <form
+            onSubmit={handleSubmitStall}
+            className="bg-white border border-border rounded-lg p-5 space-y-5"
+          >
+            <p className="font-sans text-sm text-muted">
+              Tell buyers whether your shop is open, on a short break, or closed. The
+              banner on your storefront updates as soon as you save.
+            </p>
+
+            {/* Three options. Disabled while submitting. */}
+            <fieldset className="space-y-3" disabled={stallSubmitting}>
+              <legend className="sr-only">Shop status</legend>
+              {([
+                {
+                  key: 'open' as const,
+                  label: 'Open',
+                  sub: 'Buyers can place orders normally.',
+                },
+                {
+                  key: 'vacation' as const,
+                  label: 'On vacation',
+                  sub: 'Catalog stays visible. Buyers see your message and know orders are paused.',
+                },
+                {
+                  key: 'closed' as const,
+                  label: 'Closed',
+                  sub: 'Catalog is dimmed and buyers can&apos;t open a Buy flow.',
+                },
+              ]).map(opt => {
+                const checked = stallStatus === opt.key
+                return (
+                  <label
+                    key={opt.key}
+                    className={`flex items-start gap-3 p-3 rounded border cursor-pointer transition-colors ${
+                      checked
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:bg-input/30'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="stallStatus"
+                      value={opt.key}
+                      checked={checked}
+                      onChange={() => setStallStatus(opt.key)}
+                      className="mt-1"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-sans text-base font-medium text-foreground">
+                        {opt.label}
+                      </p>
+                      <p
+                        className="font-sans text-xs text-muted mt-0.5"
+                        // Apostrophes in the static copy live in `sub` so render with HTML entity.
+                        dangerouslySetInnerHTML={{ __html: opt.sub }}
+                      />
+                    </div>
+                  </label>
+                )
+              })}
+            </fieldset>
+
+            {/* Optional message — only useful for vacation/closed but kept
+                visible in 'open' too so the seller can pre-write a note. */}
+            <div className="space-y-2">
+              <label
+                htmlFor="stallMessage"
+                className="block font-sans text-sm font-medium text-foreground"
+              >
+                Message <span className="text-muted font-normal">(optional, shown to buyers)</span>
+              </label>
+              <textarea
+                id="stallMessage"
+                value={stallMessage}
+                onChange={e => setStallMessage(e.target.value)}
+                rows={2}
+                maxLength={200}
+                placeholder={
+                  stallStatus === 'vacation'
+                    ? 'Back from a short break the second week of June.'
+                    : stallStatus === 'closed'
+                      ? 'Thanks for visiting. Not taking new orders right now.'
+                      : ''
+                }
+                className="w-full px-3 py-2 border border-border rounded font-sans text-base placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                disabled={stallSubmitting}
+              />
+              <p className="font-sans text-xs text-muted text-right tabular-nums">
+                {stallMessage.length}/200
+              </p>
+            </div>
+
+            {/* Password — needed for the server to decrypt the seller's nsec
+                and sign the kind 30053 event. */}
+            <div className="space-y-2">
+              <label
+                htmlFor="stallPassword"
+                className="block font-sans text-sm font-medium text-foreground"
+              >
+                Your password
+              </label>
+              <div className="relative">
+                <input
+                  id="stallPassword"
+                  type={stallShowPassword ? 'text' : 'password'}
+                  value={stallPassword}
+                  onChange={e => setStallPassword(e.target.value)}
+                  placeholder="Enter your password to sign the status update"
+                  className="w-full px-3 py-2 pr-10 border border-border rounded font-sans text-base placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary"
+                  disabled={stallSubmitting}
+                  autoComplete="current-password"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setStallShowPassword(p => !p)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted hover:text-foreground"
+                  aria-label={stallShowPassword ? 'Hide password' : 'Show password'}
+                  tabIndex={-1}
+                >
+                  {stallShowPassword ? (
+                    <EyeOff className="w-4 h-4" />
+                  ) : (
+                    <Eye className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+              <p className="font-sans text-xs text-muted">
+                We use it to decrypt your Nostr key locally on the server, sign the
+                event, then discard it. Bitscy never stores your password.
+              </p>
+            </div>
+
+            {/* Error + success */}
+            {stallError && (
+              <p className="font-sans text-sm text-error">{stallError}</p>
+            )}
+            {stallSaved && (
+              <p className="font-sans text-sm text-success">
+                Status updated and published to Nostr ✓
+              </p>
+            )}
+
+            <button
+              type="submit"
+              disabled={stallSubmitting || !stallPassword}
+              className="w-full bg-primary text-primary-foreground py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              style={{ minHeight: '48px' }}
+            >
+              {stallSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Publishing…
+                </>
+              ) : (
+                'Save status'
+              )}
+            </button>
+          </form>
         </section>
 
         {/* SECURITY */}
