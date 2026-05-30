@@ -7,6 +7,7 @@ import { ChevronLeft, Plus, X, Loader2 } from 'lucide-react'
 
 import { ApiError } from '@/lib/api-error'
 import { updateProfile, type SignedChallengeEvent } from '@/lib/api/auth'
+import { updateLongBio } from '@/lib/api/seller'
 import { uploadImage } from '@/lib/api/upload'
 import { signNostrEvent } from '@/lib/auth/sign'
 import { getSecretKey } from '@/lib/auth/storage'
@@ -41,6 +42,13 @@ function ProfilePageContent() {
   const [isSaving, setIsSaving] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
+  // Long bio (NIP-23 kind 30023). Its own form / endpoint so the main
+  // profile save isn't blocked on writing a 10K-char essay.
+  const [longBio, setLongBio] = useState('')
+  const [isSavingBio, setIsSavingBio] = useState(false)
+  const [bioError, setBioError] = useState<string | null>(null)
+  const [bioSaved, setBioSaved] = useState(false)
+
   // Pre-fill the form from the authenticated user. Re-runs when the
   // session store changes (e.g., after /api/auth/me hydrate completes).
   useEffect(() => {
@@ -48,6 +56,7 @@ function ProfilePageContent() {
     setDisplayName(user.displayName ?? '')
     setAbout(user.about ?? '')
     setLightningAddress(user.lightningAddr ?? '')
+    setLongBio(user.longBio ?? '')
     if (user.avatar) {
       setAvatarUrl(user.avatar)
       setAvatarState('uploaded')
@@ -187,6 +196,36 @@ function ProfilePageContent() {
           : 'Connection issue. Check your network and try again.',
       )
       setIsSaving(false)
+    }
+  }
+
+  const handleSaveLongBio = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (isSavingBio || !user) return
+    const trimmed = longBio.trim()
+    if (trimmed.length === 0) {
+      setBioError('Write a few sentences before saving.')
+      return
+    }
+    setIsSavingBio(true)
+    setBioError(null)
+    setBioSaved(false)
+    try {
+      const res = await updateLongBio(trimmed)
+      // Reflect the saved value back into the session store so other pages
+      // (storefront, sovereignty page) pick it up immediately.
+      setUser(res.user)
+      setLongBio(res.user.longBio ?? '')
+      setBioSaved(true)
+      setTimeout(() => setBioSaved(false), 4000)
+    } catch (err) {
+      setBioError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not publish your bio. Try again.',
+      )
+    } finally {
+      setIsSavingBio(false)
     }
   }
 
@@ -395,6 +434,73 @@ function ProfilePageContent() {
           )}
         </div>
       </form>
+
+      {/* About your shop — NIP-23 kind 30023 long bio. Separate form
+          because the underlying endpoint differs from the main profile
+          save and publishing a long article shouldn't gate the quick
+          edits above. Also, the existing form auto-navigates away on
+          success which we don't want here. */}
+      <section className="mx-auto max-w-2xl px-5 sm:px-6 lg:px-8 pb-24">
+        <div className="h-px bg-gold opacity-60 mb-8" />
+        <form onSubmit={handleSaveLongBio} className="space-y-4">
+          <div>
+            <h2 className="font-serif text-2xl sm:text-3xl font-normal mb-2">
+              About your shop.
+            </h2>
+            <p className="font-sans text-sm text-muted">
+              Tell buyers the story behind your craft. Markdown is supported,
+              published as a NIP-23 article on Nostr.
+            </p>
+          </div>
+
+          <div>
+            <label htmlFor="longBio" className="sr-only">
+              About your shop
+            </label>
+            <textarea
+              id="longBio"
+              value={longBio}
+              onChange={e => setLongBio(e.target.value)}
+              maxLength={10000}
+              rows={10}
+              placeholder="A short essay about your work, your process, where the materials come from..."
+              disabled={isSavingBio}
+              className="w-full px-4 py-3 bg-white border border-border rounded font-sans text-base leading-relaxed placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary"
+              style={{ fontSize: '16px' }}
+            />
+            <p className="font-sans text-xs text-muted mt-1 tabular-nums">
+              {longBio.length}/10,000
+            </p>
+          </div>
+
+          {bioError && (
+            <p className="font-sans text-sm text-error">{bioError}</p>
+          )}
+          {bioSaved && (
+            <p className="font-sans text-sm text-success">
+              Bio saved and published to Nostr ✓
+            </p>
+          )}
+
+          <div>
+            <button
+              type="submit"
+              disabled={isSavingBio || longBio.trim().length === 0}
+              className="bg-primary text-primary-foreground py-3 px-6 rounded font-sans font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
+              style={{ minHeight: '48px' }}
+            >
+              {isSavingBio ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Publishing…
+                </>
+              ) : (
+                'Save & publish'
+              )}
+            </button>
+          </div>
+        </form>
+      </section>
     </div>
   )
 }

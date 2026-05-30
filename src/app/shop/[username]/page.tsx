@@ -7,7 +7,12 @@ import { ChevronLeft } from 'lucide-react'
 
 import { ApiError } from '@/lib/api-error'
 import { getShop, type StorefrontResponse } from '@/lib/api/products'
-import { getShopReviews, type ShopReview } from '@/lib/api/seller'
+import {
+  getShopAbout,
+  getShopReviews,
+  type ShopAboutResponse,
+  type ShopReview,
+} from '@/lib/api/seller'
 import { VerifiedSellerBadge } from '@/components/seller/verified-seller-badge'
 
 // Demo BTC/NGN rate, mirrored from the server. Same constants as the
@@ -82,6 +87,47 @@ function Stars({ rating, size = 'sm' }: { rating: number; size?: 'sm' | 'lg' }) 
 // 404 / empty / fetch failure so storefronts without any reviews render
 // cleanly with no leftover heading.
 // ────────────────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────────────
+// LongBioBlock — NIP-23 kind 30023 long-form bio. Self-contained: fetches
+// its own data and renders nothing on 404 / null / fetch failure so the
+// storefront stays the same shape for sellers who haven't written one yet.
+//
+// Renders as plain pre-wrapped text so paragraph breaks survive without
+// pulling in a markdown library. Upgrading to react-markdown later is a
+// drop-in swap.
+// ────────────────────────────────────────────────────────────────────────────
+function LongBioBlock({ username }: { username: string }) {
+  const [data, setData] = useState<ShopAboutResponse | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getShopAbout(username)
+      .then(res => {
+        if (!cancelled) setData(res)
+      })
+      .catch(() => {
+        if (!cancelled) setData(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [username])
+
+  if (!data || !data.longBio) return null
+
+  return (
+    <div className="max-w-xl mb-6 self-stretch lg:self-auto">
+      <div className="h-px bg-gold opacity-60 my-5" />
+      <h2 className="font-sans text-xs text-muted uppercase tracking-widest mb-3">
+        About this shop
+      </h2>
+      <pre className="font-sans text-base text-foreground leading-relaxed whitespace-pre-wrap wrap-break-word">
+        {data.longBio}
+      </pre>
+    </div>
+  )
+}
+
 function ReviewsSection({ username }: { username: string }) {
   const [data, setData] = useState<{ averageRating: number; count: number; reviews: ShopReview[] } | null>(null)
   const [isFetching, setIsFetching] = useState(true)
@@ -405,9 +451,11 @@ export default function ShopPage({ params }: { params: Promise<{ username: strin
             </p>
           )}
 
-          {/* HOOK: Feature 8 — Long bio (markdown) goes here.
-              Fetch GET /api/shop/<username>/about and render below the
-              short `about` line when longBio is non-null. */}
+          {/* Long bio — kind 30023 NIP-23 markdown. Fetched in its own
+              component because most storefronts won't have one set yet,
+              and the component hides itself silently on empty / 404. */}
+          <LongBioBlock username={seller.username} />
+
 
           {/* HOOK: Feature 9 — Sovereignty page link goes here.
               <Link href={`/sovereignty/${nip19.npubEncode(seller.npub)}`}>
