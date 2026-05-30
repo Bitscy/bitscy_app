@@ -7,6 +7,7 @@ import { ChevronLeft } from 'lucide-react'
 
 import { ApiError } from '@/lib/api-error'
 import { getShop, type StorefrontResponse } from '@/lib/api/products'
+import { VerifiedSellerBadge } from '@/components/seller/verified-seller-badge'
 
 // Demo BTC/NGN rate, mirrored from the server. Same constants as the
 // marketplace + product detail pages.
@@ -206,10 +207,10 @@ export default function ShopPage({ params }: { params: Promise<{ username: strin
             {displayName}
           </h1>
 
-          {/* HOOK: Feature 2 — Verified Seller badge chip goes here.
-              Fetch GET /api/shop/<username>/badge and render
-              "✓ Verified Seller · N sales since <date>" when 200,
-              silent skip on 404. */}
+          {/* Verified Seller badge — sourced from kind 30052 ledger event.
+              Silent when the seller has no completed sales yet. */}
+          <VerifiedSellerBadge username={seller.username} variant="chip" />
+
 
           {/* Subtitle */}
           <p className="font-sans text-sm sm:text-base text-muted mb-5">

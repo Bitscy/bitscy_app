@@ -17,6 +17,7 @@ import { useSession } from '@/lib/auth/use-session'
 import { clearSecretKey } from '@/lib/auth/storage'
 import { useSessionStore } from '@/store/session-store'
 import type { Order, OrderStatus, Product } from '@/types/shared'
+import { VerifiedSellerBadge } from '@/components/seller/verified-seller-badge'
 
 // Mirror the server's demo BTC/NGN rate for client-side sats → ₦ conversions
 // (order totals, total-earned aggregate). Kept in sync with the rest of the
@@ -406,6 +407,14 @@ function SellerPageContent() {
                   >
                     {copiedText === 'shop' ? 'Copied' : 'Copy'}
                   </button>
+                </div>
+              )}
+
+              {/* Verified Seller — appears once the first sale settles and
+                  publishes a kind 30052 event. Silent until then. */}
+              {username && (
+                <div className="mt-4">
+                  <VerifiedSellerBadge username={username} variant="card" />
                 </div>
               )}
             </div>
