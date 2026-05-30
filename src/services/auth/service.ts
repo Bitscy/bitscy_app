@@ -7,6 +7,9 @@ import { ApiError } from '@/lib/api-error';
 import type { SessionData } from '@/lib/session';
 import type { User } from '@/types/shared';
 import { publishEvent } from '../nostr/publisher';
+import { buildRelayListEventTemplate, buildLongFormEventTemplate } from '../nostr/events';
+import { signEventWithSystemKey } from '../nostr/signing';
+import { NOSTR_RELAY_LIST } from '@/lib/env';
 
 // ============================================================================
 // Signup
@@ -156,6 +159,7 @@ export async function updateProfile(
     lightningAddr?: string;
   },
   signedProfileEvent?: NostrEvent,
+  signedRelayListEvent?: NostrEvent,
 ): Promise<User> {
   const rawUser = await repository.findUserById(userId);
   if (!rawUser) throw new ApiError('NOT_FOUND', 'User not found', 404);
@@ -169,6 +173,18 @@ export async function updateProfile(
     }
   }
 
+  if (signedRelayListEvent) {
+    if (signedRelayListEvent.pubkey !== rawUser.npub) {
+      throw new ApiError('FORBIDDEN', 'Relay list event pubkey does not match session user', 403);
+    }
+    if (signedRelayListEvent.kind !== 10002) {
+      throw new ApiError('VALIDATION_ERROR', 'Expected kind 10002 relay list event', 400);
+    }
+    if (!verifyEvent(signedRelayListEvent)) {
+      throw new ApiError('VALIDATION_ERROR', 'Invalid relay list event signature', 400);
+    }
+  }
+
   const updated = await repository.updateUser(userId, {
     ...(input.displayName !== undefined && { displayName: input.displayName }),
     ...(input.about !== undefined && { about: input.about }),
@@ -177,13 +193,45 @@ export async function updateProfile(
     ...(input.lightningAddr !== undefined && { lightningAddr: input.lightningAddr }),
   });
 
-  // If the client provided a pre-signed kind 0 event, publish it to relays.
-  // Best-effort — don't fail the profile update if relays are slow.
+  // Publish Nostr events best-effort — profile update never fails due to relay issues.
   if (signedProfileEvent) {
     void publishEvent(signedProfileEvent).catch((err) =>
       console.error('[auth] Profile Nostr publish failed for user', userId, err),
     );
   }
+
+  // NIP-65: publish user-signed relay list if provided; otherwise publish platform relay list.
+  const relayListEvent = signedRelayListEvent
+    ?? signEventWithSystemKey(buildRelayListEventTemplate(NOSTR_RELAY_LIST));
+
+  void publishEvent(relayListEvent).catch((err) =>
+    console.error('[auth] Relay list Nostr publish failed for user', userId, err),
+  );
+
+  return toUser(updated);
+}
+
+// ============================================================================
+// Long-form bio (NIP-23)
+// ============================================================================
+
+export async function updateLongBio(userId: string, longBio: string): Promise<User> {
+  const rawUser = await repository.findUserById(userId);
+  if (!rawUser) throw new ApiError('NOT_FOUND', 'User not found', 404);
+  if (rawUser.role !== 'SELLER') throw new ApiError('FORBIDDEN', 'Only sellers can set a long bio', 403);
+
+  const updated = await repository.updateUser(userId, { longBio });
+
+  // NIP-23: publish kind 30023 long-form event signed by the platform key.
+  void publishEvent(
+    signEventWithSystemKey(
+      buildLongFormEventTemplate({
+        userId,
+        displayName: updated.displayName,
+        longBio,
+      }),
+    ),
+  ).catch((err) => console.error('[auth] NIP-23 long bio publish failed for user', userId, err));
 
   return toUser(updated);
 }
@@ -217,6 +265,7 @@ function toUser(u: PrismaUser): User {
     displayName: u.displayName,
     avatar: u.avatar,
     about: u.about,
+    longBio: u.longBio ?? null,
     lightningAddr: u.lightningAddr,
     role: u.role as User['role'],
     createdAt: u.createdAt.toISOString(),

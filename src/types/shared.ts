@@ -21,6 +21,7 @@ export interface User {
   displayName: string | null;
   avatar: string | null;
   about: string | null;
+  longBio: string | null;
   lightningAddr: string | null;
   role: UserRole;
   createdAt: string;
@@ -33,6 +34,9 @@ export interface SellerInfo {
   lightningAddress: string;
   displayName: string | null;
   avatar: string | null;
+  about: string | null;
+  stallStatus: string;           // "open" | "vacation" | "closed"
+  stallStatusMessage: string | null;
 }
 
 // ============================================================================
@@ -113,6 +117,9 @@ export interface Order {
   status: OrderStatus;
   shippingNote: string | null;
   nostrEventId: string | null;
+  // Mirrors the most recent kind 30050 state. Optional until Commerce wires
+  // publishOrderStateEvent in Stage 3, at which point mapOrder will set it.
+  currentState?: string;
   createdAt: string;
   paidAt: string | null;
   shippedAt: string | null;

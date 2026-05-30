@@ -50,6 +50,19 @@ vi.mock('@/services/lightning/breez-platform');
 vi.mock('@/services/catalog/service');
 vi.mock('@/services/nostr/client');
 vi.mock('@/services/nostr/signing');
+vi.mock('@/services/nostr/encryption', () => ({
+  encryptToPubkey: vi.fn().mockReturnValue('nip44-ciphertext'),
+  decryptFromPubkey: vi.fn().mockReturnValue('decrypted'),
+}));
+vi.mock('@/services/nostr/zaps', () => ({
+  publishZapReceipt: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('@/services/nostr/order-state', () => ({
+  publishOrderStateEvent: vi.fn().mockResolvedValue({ id: 'mock-order-state-event' }),
+}));
+vi.mock('@/services/nostr/badge', () => ({
+  publishSellerBadge: vi.fn().mockResolvedValue(undefined),
+}));
 // Partially mock push — keep the real ExpiredSubscriptionError (needs its `endpoint` property)
 // so `err instanceof ExpiredSubscriptionError` works in service.ts.
 vi.mock('@/lib/push', async () => {
@@ -102,6 +115,9 @@ const mockSeller = {
   lightningAddress: 'adaeze@bitscy.com',
   displayName: 'Adaeze Studio',
   avatar: null,
+  about: null,
+  stallStatus: 'open',
+  stallStatusMessage: null,
 };
 
 /** A fully populated DB order row as returned by repository.findOrderById */

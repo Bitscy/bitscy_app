@@ -95,3 +95,54 @@ export async function unlistProduct(id: string) {
     data: { status: 'UNLISTED' },
   });
 }
+
+// ============================================================================
+// Reviews
+// ============================================================================
+
+export async function upsertReview(data: {
+  orderId: string;
+  buyerId: string;
+  sellerId: string;
+  rating: number;
+  content: string;
+  nostrEventId: string;
+}) {
+  return prisma.review.upsert({
+    where: { orderId: data.orderId },
+    create: data,
+    update: {
+      rating: data.rating,
+      content: data.content,
+      nostrEventId: data.nostrEventId,
+    },
+  });
+}
+
+export async function findReviewByOrderId(orderId: string) {
+  return prisma.review.findUnique({ where: { orderId } });
+}
+
+export async function listReviewsBySeller(
+  sellerId: string,
+  limit = 20,
+): Promise<{ reviews: Awaited<ReturnType<typeof prisma.review.findMany>>; averageRating: number; count: number }> {
+  const [reviews, agg] = await Promise.all([
+    prisma.review.findMany({
+      where: { sellerId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    }),
+    prisma.review.aggregate({
+      where: { sellerId },
+      _avg: { rating: true },
+      _count: { rating: true },
+    }),
+  ]);
+
+  return {
+    reviews,
+    averageRating: agg._avg.rating ?? 0,
+    count: agg._count.rating,
+  };
+}
