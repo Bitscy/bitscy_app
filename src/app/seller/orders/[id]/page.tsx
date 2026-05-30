@@ -7,7 +7,12 @@ import { nip04 } from 'nostr-tools'
 import { ChevronLeft, Copy, Check, Loader2 } from 'lucide-react'
 
 import { ApiError } from '@/lib/api-error'
-import { getSellerOrder, markOrderShipped, type SellerOrderDetail } from '@/lib/api/commerce'
+import {
+  getSellerOrder,
+  markOrderShipped,
+  refundOrder,
+  type SellerOrderDetail,
+} from '@/lib/api/commerce'
 import { useSession } from '@/lib/auth/use-session'
 import { getSecretKey } from '@/lib/auth/storage'
 import type { OrderStatus } from '@/types/shared'
@@ -118,6 +123,13 @@ export default function SellerOrderDetailPage({
   const [shippingConfirm, setShippingConfirm] = useState(false)
   const [isShipping, setIsShipping] = useState(false)
   const [shippingError, setShippingError] = useState<string | null>(null)
+
+  // Refund action — seller initiates with an optional note. Confirmation
+  // dialog before submit so an accidental tap doesn't fire a real refund.
+  const [refundConfirm, setRefundConfirm] = useState(false)
+  const [refundNote, setRefundNote] = useState('')
+  const [isRefunding, setIsRefunding] = useState(false)
+  const [refundError, setRefundError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!user || user.role !== 'SELLER') return
@@ -231,6 +243,28 @@ export default function SellerOrderDetailPage({
       )
     } finally {
       setIsShipping(false)
+    }
+  }
+
+  const handleRefund = async () => {
+    if (!order || isRefunding) return
+    setIsRefunding(true)
+    setRefundError(null)
+    try {
+      const res = await refundOrder(order.id, refundNote || undefined)
+      // Preserve seller-view-specific fields (buyer, encryptedShipping,
+      // priceNgnDisplay) while updating the base order fields.
+      setOrder(prev => (prev ? { ...prev, ...res.order } : prev))
+      setRefundConfirm(false)
+      setRefundNote('')
+    } catch (err) {
+      setRefundError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not issue refund. Try again.',
+      )
+    } finally {
+      setIsRefunding(false)
     }
   }
 
@@ -552,6 +586,41 @@ export default function SellerOrderDetailPage({
           </div>
         </section>
 
+        {/* Buyer raised a dispute — surface it so the seller acts. */}
+        {order.currentState === 'disputed' && (
+          <section className="mb-6">
+            <div
+              className="rounded-lg border px-4 py-3 sm:py-4"
+              style={{
+                backgroundColor: 'rgba(184, 80, 73, 0.10)',
+                borderColor: '#B85049',
+              }}
+            >
+              <p className="font-sans text-sm sm:text-base font-medium text-error">
+                The buyer raised a dispute on this order.
+              </p>
+              <p className="font-sans text-sm text-foreground/80 mt-1">
+                Reach out to {buyerLabel} or message Bitscy support to
+                resolve. You can still issue a refund below.
+              </p>
+            </div>
+          </section>
+        )}
+
+        {/* Already refunded — terminal state for this branch. */}
+        {order.currentState === 'refunded' && (
+          <section className="mb-6">
+            <div className="rounded-lg border border-border px-4 py-3 sm:py-4 bg-input/30">
+              <p className="font-sans text-sm sm:text-base font-medium text-foreground">
+                This order has been refunded.
+              </p>
+              <p className="font-sans text-sm text-muted mt-1">
+                The refund event is on Nostr. No further action needed.
+              </p>
+            </div>
+          </section>
+        )}
+
         {/* Mark-as-shipped action — only when PAID */}
         {order.status === 'PAID' && (
           <>
@@ -603,6 +672,96 @@ export default function SellerOrderDetailPage({
             )}
           </>
         )}
+
+        {/* Refund action — available on every non-terminal state EXCEPT
+            already refunded. CANCELLED and DELIVERED are intentionally
+            included: the seller might still need to issue a goodwill
+            refund post-delivery (damaged item, wrong fit). The spec
+            hides on CANCELLED/DELIVERED — we follow that. */}
+        {order.status !== 'CANCELLED' &&
+          order.status !== 'DELIVERED' &&
+          order.currentState !== 'refunded' && (
+            <section className="mt-8">
+              <h2 className="font-serif text-lg font-normal mb-4">Refund</h2>
+              {!refundConfirm ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRefundConfirm(true)
+                    setRefundError(null)
+                  }}
+                  className="w-full bg-white border border-error text-error py-3 rounded font-sans font-medium hover:bg-error/5 transition-colors"
+                  style={{ minHeight: '48px' }}
+                >
+                  Refund this order
+                </button>
+              ) : (
+                <div className="bg-white border border-border rounded-lg p-4 space-y-3">
+                  <p className="font-sans text-sm text-foreground">
+                    Refund this order to {buyerLabel}? The buyer will see
+                    the refund on their side and the event goes to Nostr.
+                  </p>
+                  <div>
+                    <label
+                      htmlFor="refundNote"
+                      className="block font-sans text-sm text-muted mb-2"
+                    >
+                      Note for the buyer (optional)
+                    </label>
+                    <textarea
+                      id="refundNote"
+                      value={refundNote}
+                      onChange={e => setRefundNote(e.target.value)}
+                      maxLength={500}
+                      rows={3}
+                      placeholder="Out of stock, shipping damage, etc."
+                      disabled={isRefunding}
+                      className="w-full px-4 py-3 bg-white border border-border rounded font-sans text-base placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary"
+                      style={{ fontSize: '16px' }}
+                    />
+                    <p className="font-sans text-xs text-muted mt-1 tabular-nums">
+                      {refundNote.length}/500
+                    </p>
+                  </div>
+
+                  {refundError && (
+                    <p className="font-sans text-xs text-error">{refundError}</p>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={handleRefund}
+                      disabled={isRefunding}
+                      className="flex-1 bg-error text-primary-foreground py-3 rounded font-sans text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      style={{ minHeight: '48px' }}
+                    >
+                      {isRefunding ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          Refunding…
+                        </>
+                      ) : (
+                        'Confirm refund'
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRefundConfirm(false)
+                        setRefundNote('')
+                        setRefundError(null)
+                      }}
+                      disabled={isRefunding}
+                      className="flex-1 bg-transparent text-foreground py-3 rounded font-sans text-sm font-medium hover:bg-border transition-colors disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
 
         <p className="font-sans text-xs text-muted text-center mt-8">
           Need help with this order? Reach out to Bitscy support.

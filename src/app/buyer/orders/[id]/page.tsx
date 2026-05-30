@@ -7,7 +7,9 @@ import { ChevronLeft, Copy, Check, Eye, EyeOff, Loader2 } from 'lucide-react'
 
 import { ApiError } from '@/lib/api-error'
 import {
+  confirmOrderDelivered,
   getBuyerOrder,
+  raiseOrderDispute,
   submitOrderReview,
   type BuyerOrderDetail,
 } from '@/lib/api/commerce'
@@ -100,6 +102,15 @@ export default function BuyerOrderDetailPage({
   const [reviewError, setReviewError] = useState<string | null>(null)
   const [reviewSubmitted, setReviewSubmitted] = useState<{ nostrEventId: string } | null>(null)
 
+  // Order state action UI. Both actions share the same in-flight flag
+  // since the two buttons share the same card area.
+  const [stateActionSubmitting, setStateActionSubmitting] = useState<
+    'deliver' | 'dispute' | null
+  >(null)
+  const [stateActionError, setStateActionError] = useState<string | null>(null)
+  const [disputeOpen, setDisputeOpen] = useState(false)
+  const [disputeReason, setDisputeReason] = useState('')
+
   useEffect(() => {
     if (!user) return
     let cancelled = false
@@ -136,6 +147,47 @@ export default function BuyerOrderDetailPage({
     navigator.clipboard.writeText(order.id)
     setRefCopied(true)
     setTimeout(() => setRefCopied(false), 2000)
+  }
+
+  const handleConfirmDelivered = async () => {
+    if (!order || stateActionSubmitting) return
+    setStateActionSubmitting('deliver')
+    setStateActionError(null)
+    try {
+      const res = await confirmOrderDelivered(order.id)
+      // Preserve buyer-specific fields (seller, priceNgnDisplay) while
+      // refreshing the base order fields the server just updated.
+      setOrder(prev => (prev ? { ...prev, ...res.order } : prev))
+    } catch (err) {
+      setStateActionError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not confirm delivery. Try again.',
+      )
+    } finally {
+      setStateActionSubmitting(null)
+    }
+  }
+
+  const handleSubmitDispute = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!order || stateActionSubmitting) return
+    setStateActionSubmitting('dispute')
+    setStateActionError(null)
+    try {
+      const res = await raiseOrderDispute(order.id, disputeReason || undefined)
+      setOrder(prev => (prev ? { ...prev, ...res.order } : prev))
+      setDisputeOpen(false)
+      setDisputeReason('')
+    } catch (err) {
+      setStateActionError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not raise dispute. Try again.',
+      )
+    } finally {
+      setStateActionSubmitting(null)
+    }
   }
 
   const handleSubmitReview = async (e: React.FormEvent) => {
@@ -429,6 +481,156 @@ export default function BuyerOrderDetailPage({
             </div>
           </Link>
         </section>
+
+        {/* Order state actions — buyer-side. "Confirm received" appears on
+            SHIPPED orders; "Raise a dispute" on PAID or SHIPPED orders that
+            haven't been disputed/delivered/refunded already. Hidden entirely
+            on terminal states (DELIVERED, CANCELLED) and on PENDING. */}
+        {(order.status === 'PAID' || order.status === 'SHIPPED') &&
+          order.currentState !== 'disputed' &&
+          order.currentState !== 'refunded' && (
+            <section className="mb-8">
+              <h2 className="font-serif text-lg font-normal mb-4">
+                Status actions
+              </h2>
+              <div className="bg-white border border-border rounded-lg p-4 space-y-3">
+                {order.status === 'SHIPPED' && (
+                  <button
+                    type="button"
+                    onClick={handleConfirmDelivered}
+                    disabled={stateActionSubmitting !== null}
+                    className="w-full bg-primary text-primary-foreground py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    style={{ minHeight: '48px' }}
+                  >
+                    {stateActionSubmitting === 'deliver' ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Confirming…
+                      </>
+                    ) : (
+                      'Confirm I received this'
+                    )}
+                  </button>
+                )}
+
+                {!disputeOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDisputeOpen(true)
+                      setStateActionError(null)
+                    }}
+                    disabled={stateActionSubmitting !== null}
+                    className="w-full bg-white border border-border text-foreground py-3 rounded font-sans font-medium hover:bg-input/30 transition-colors disabled:opacity-50"
+                    style={{ minHeight: '48px' }}
+                  >
+                    Raise a dispute
+                  </button>
+                ) : (
+                  <form
+                    onSubmit={handleSubmitDispute}
+                    className="space-y-3 pt-1"
+                  >
+                    <div>
+                      <label
+                        htmlFor="disputeReason"
+                        className="block font-sans text-sm text-muted mb-2"
+                      >
+                        What went wrong? (optional)
+                      </label>
+                      <textarea
+                        id="disputeReason"
+                        value={disputeReason}
+                        onChange={e => setDisputeReason(e.target.value)}
+                        maxLength={500}
+                        rows={3}
+                        placeholder="Tell the seller and Bitscy what happened."
+                        disabled={stateActionSubmitting !== null}
+                        className="w-full px-4 py-3 bg-white border border-border rounded font-sans text-base placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary"
+                        style={{ fontSize: '16px' }}
+                      />
+                      <p className="font-sans text-xs text-muted mt-1 tabular-nums">
+                        {disputeReason.length}/500
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="submit"
+                        disabled={stateActionSubmitting !== null}
+                        className="flex-1 bg-error text-primary-foreground py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        style={{ minHeight: '48px' }}
+                      >
+                        {stateActionSubmitting === 'dispute' ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            Submitting…
+                          </>
+                        ) : (
+                          'Submit dispute'
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDisputeOpen(false)
+                          setDisputeReason('')
+                          setStateActionError(null)
+                        }}
+                        disabled={stateActionSubmitting !== null}
+                        className="text-muted font-sans font-medium hover:text-foreground transition-colors px-3"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                {stateActionError && (
+                  <p className="font-sans text-sm text-error">
+                    {stateActionError}
+                  </p>
+                )}
+              </div>
+            </section>
+          )}
+
+        {/* If the order has been disputed or refunded, surface that as a
+            neutral notice — the actions card is hidden, so without this
+            block the buyer sees no acknowledgement that their dispute went
+            through. */}
+        {order.currentState === 'disputed' && (
+          <section className="mb-8">
+            <div
+              className="rounded-lg border px-4 py-3 sm:py-4"
+              style={{
+                backgroundColor: 'rgba(184, 80, 73, 0.10)',
+                borderColor: '#B85049',
+              }}
+            >
+              <p className="font-sans text-sm sm:text-base font-medium text-error">
+                Dispute raised
+              </p>
+              <p className="font-sans text-sm text-foreground/80 mt-1">
+                Bitscy and the seller can see your dispute. We&apos;ll be in
+                touch about next steps.
+              </p>
+            </div>
+          </section>
+        )}
+
+        {order.currentState === 'refunded' && (
+          <section className="mb-8">
+            <div className="rounded-lg border border-border px-4 py-3 sm:py-4 bg-input/30">
+              <p className="font-sans text-sm sm:text-base font-medium text-foreground">
+                This order was refunded
+              </p>
+              <p className="font-sans text-sm text-muted mt-1">
+                The seller has marked the order refunded. Sats should arrive
+                back in your Lightning wallet shortly.
+              </p>
+            </div>
+          </section>
+        )}
 
         {/* Review section — gated to delivered orders + the 14-day post-ship
             auto-release window. Backend enforces the same rule and would 422

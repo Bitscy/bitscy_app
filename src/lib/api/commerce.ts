@@ -101,6 +101,45 @@ export function submitOrderReview(
   return postFetcher(`/api/orders/${encodeURIComponent(orderId)}/review`, input);
 }
 
+// ============================================================================
+// Order state actions (kind 30050)
+// ============================================================================
+
+/**
+ * Buyer confirms they received the order. Transitions order to DELIVERED
+ * and publishes a kind 30050 order:state event server-side.
+ */
+export function confirmOrderDelivered(orderId: string): Promise<{ order: Order }> {
+  return patchFetcher(`/api/orders/${encodeURIComponent(orderId)}/deliver`, {});
+}
+
+/**
+ * Buyer raises a dispute. Reason is optional (max 500 chars). Server
+ * publishes the kind 30050 with currentState=disputed.
+ */
+export function raiseOrderDispute(
+  orderId: string,
+  reason?: string,
+): Promise<{ order: Order }> {
+  const body: { reason?: string } = {};
+  if (reason && reason.trim()) body.reason = reason.trim();
+  return patchFetcher(`/api/orders/${encodeURIComponent(orderId)}/dispute`, body);
+}
+
+/**
+ * Seller issues a refund. Note is optional (max 500 chars). Server
+ * publishes the kind 30050 with currentState=refunded. Per Commerce
+ * spec the actual sats-return-to-buyer flow is handled separately.
+ */
+export function refundOrder(
+  orderId: string,
+  note?: string,
+): Promise<{ order: Order }> {
+  const body: { note?: string } = {};
+  if (note && note.trim()) body.note = note.trim();
+  return postFetcher(`/api/orders/${encodeURIComponent(orderId)}/refund`, body);
+}
+
 // The seller view of an order detail includes the buyer's npub (pseudonymous,
 // public) and the NIP-04 ciphertext of the shipping address — the seller's
 // client decrypts using their nsec. Never exposes the buyer's displayName.
