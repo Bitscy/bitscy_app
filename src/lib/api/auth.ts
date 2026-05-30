@@ -96,6 +96,12 @@ export interface UpdateProfileInput {
    * Build via `signNostrEvent` in `@/lib/auth/sign`.
    */
   nostrEvent?: SignedChallengeEvent;
+  /**
+   * Optional pre-signed kind 10002 (relay list) event. Published alongside
+   * the kind 0 so clients reading the seller's profile know which relays
+   * to query for the rest of their Nostr presence (products, orders, etc.).
+   */
+  nostrRelayListEvent?: SignedChallengeEvent;
 }
 
 export function updateProfile(input: UpdateProfileInput): Promise<{ user: User }> {

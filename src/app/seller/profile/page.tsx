@@ -94,21 +94,25 @@ function ProfilePageContent() {
     setErrorMessage(null)
 
     try {
-      // Build a signed kind 0 Nostr event so the profile mirrors to
-      // public relays. If the unlocked nsec isn't in IndexedDB (storage
-      // cleared / different device), skip the Nostr piece — Postgres
-      // still updates and the user can republish after re-auth.
+      // Build signed kind 0 (profile) + kind 10002 (relay list) Nostr events
+      // so the profile mirrors to public relays AND clients reading it can
+      // discover where the rest of this seller's Nostr presence lives.
+      // If the unlocked nsec isn't in IndexedDB (storage cleared / different
+      // device), skip the Nostr piece — Postgres still updates and the user
+      // can republish after re-auth.
       let nostrEvent: SignedChallengeEvent | undefined
+      let nostrRelayListEvent: SignedChallengeEvent | undefined
       try {
         const secretKey = await getSecretKey(user.npub)
         if (secretKey) {
+          // Kind 0 — profile metadata.
           const content = JSON.stringify({
             name: displayName || undefined,
             about: about || undefined,
             picture: avatarUrl || undefined,
             lud16: lightningAddress || user.lightningAddr || undefined,
           })
-          const signed = signNostrEvent(
+          const signedProfile = signNostrEvent(
             {
               kind: 0,
               created_at: Math.floor(Date.now() / 1000),
@@ -119,17 +123,45 @@ function ProfilePageContent() {
           )
           // VerifiedEvent is structurally a SignedChallengeEvent.
           nostrEvent = {
-            id: signed.id,
-            pubkey: signed.pubkey,
-            created_at: signed.created_at,
-            kind: signed.kind,
-            tags: signed.tags as string[][],
-            content: signed.content,
-            sig: signed.sig,
+            id: signedProfile.id,
+            pubkey: signedProfile.pubkey,
+            created_at: signedProfile.created_at,
+            kind: signedProfile.kind,
+            tags: signedProfile.tags as string[][],
+            content: signedProfile.content,
+            sig: signedProfile.sig,
+          }
+
+          // Kind 10002 — relay list. Tags are ['r', <relay url>] per NIP-65.
+          // Read the same relay set the server uses so seller-side and
+          // server-side publishes target the same network.
+          const relays = (process.env.NEXT_PUBLIC_NOSTR_RELAYS ?? '')
+            .split(',')
+            .map(r => r.trim())
+            .filter(Boolean)
+          if (relays.length > 0) {
+            const signedRelayList = signNostrEvent(
+              {
+                kind: 10002,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: relays.map(url => ['r', url]),
+                content: '',
+              },
+              secretKey,
+            )
+            nostrRelayListEvent = {
+              id: signedRelayList.id,
+              pubkey: signedRelayList.pubkey,
+              created_at: signedRelayList.created_at,
+              kind: signedRelayList.kind,
+              tags: signedRelayList.tags as string[][],
+              content: signedRelayList.content,
+              sig: signedRelayList.sig,
+            }
           }
         }
       } catch (err) {
-        console.warn('Failed to sign Nostr profile event', err)
+        console.warn('Failed to sign Nostr profile events', err)
       }
 
       const { user: updated } = await updateProfile({
@@ -140,6 +172,7 @@ function ProfilePageContent() {
         // Personal lightningAddr stays out of this slice — it interacts
         // with the auto-set Bitscy address and needs a dedicated UX.
         nostrEvent,
+        nostrRelayListEvent,
       })
 
       // Refresh the session store so the dashboard reflects the new
