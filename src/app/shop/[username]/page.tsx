@@ -1,113 +1,238 @@
 'use client'
 
-import { use, useState } from 'react'
+import { use, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ChevronLeft } from 'lucide-react'
 
-interface ShopProduct {
-  id: string
-  title: string
-  image: string
-  priceNaira: number
-  priceSats: number
+import { ApiError } from '@/lib/api-error'
+import { getShop, type StorefrontResponse } from '@/lib/api/products'
+
+// Demo BTC/NGN rate, mirrored from the server. Same constants as the
+// marketplace + product detail pages.
+const NGN_PER_BTC = 145_000_000n
+const SATS_PER_BTC = 100_000_000n
+
+function formatNgnFromSats(satsStr: string): string {
+  try {
+    const sats = BigInt(satsStr)
+    const ngn = (sats * NGN_PER_BTC) / SATS_PER_BTC
+    return `₦${Number(ngn).toLocaleString('en-NG')}`
+  } catch {
+    return '₦0'
+  }
 }
 
-interface ShopProfile {
-  username: string
-  shopName: string
-  fullName: string
-  initials: string
-  city: string
-  bio: string
-  products: ShopProduct[]
+function formatSats(satsStr: string): string {
+  try {
+    return `${Number(BigInt(satsStr)).toLocaleString('en-NG')} sats`
+  } catch {
+    return '0 sats'
+  }
 }
 
-// Local mock data. When the catalog endpoints are wired, this is replaced by
-// a GET /api/shops/[username] fetch.
-const SHOPS: Record<string, ShopProfile> = {
-  adaeze: {
-    username: 'adaeze',
-    shopName: 'Adaeze Studio',
-    fullName: 'Adaeze Okonkwo',
-    initials: 'A',
-    city: 'Lagos',
-    bio: 'Hand-woven textiles, beaded jewelry, and small ceramic forms. Made slowly, in Lagos.',
-    products: [
-      { id: 'indigo-fabric', title: 'Indigo Dyed Fabric', image: '/artwork-2.jpg', priceNaira: 25000, priceSats: 85000 },
-      { id: 'beaded-collar', title: 'Beaded Statement Collar', image: '/artwork-6.jpg', priceNaira: 38000, priceSats: 129000 },
-      { id: 'thrown-vase', title: 'Hand Thrown Vase', image: '/artwork-3.jpg', priceNaira: 88000, priceSats: 299000 },
-      { id: 'leather-journal', title: 'Tooled Leather Journal', image: '/artwork-5.jpg', priceNaira: 25000, priceSats: 85000 },
-      { id: 'geometric-abstract', title: 'Geometric Abstract Composition', image: '/artwork-1.jpg', priceNaira: 45000, priceSats: 153000 },
-      { id: 'adire-hanging', title: 'Adire Wall Hanging', image: '/artwork-4.jpg', priceNaira: 52000, priceSats: 177000 },
-    ],
-  },
-  ngozi: {
-    username: 'ngozi',
-    shopName: 'Ngozi',
-    fullName: 'Ngozi Adichie',
-    initials: 'N',
-    city: 'Enugu',
-    bio: 'Just getting started. New pieces coming soon.',
-    products: [],
-  },
+function initialsFor(name: string | null, fallback: string): string {
+  const source = (name && name.trim()) || fallback
+  return (source.charAt(0) || '?').toUpperCase()
 }
 
 export default function ShopPage({ params }: { params: Promise<{ username: string }> }) {
   const router = useRouter()
   const { username } = use(params)
-  const shop = SHOPS[username] ?? SHOPS['adaeze']!
 
+  const [shop, setShop] = useState<StorefrontResponse | null>(null)
+  const [isFetching, setIsFetching] = useState(true)
+  const [fetchError, setFetchError] = useState<'not_found' | 'other' | null>(null)
   const [copied, setCopied] = useState(false)
 
-  const shopUrl = `bitscy.com/shop/${shop.username}`
+  useEffect(() => {
+    let cancelled = false
+    setIsFetching(true)
+    setFetchError(null)
+    getShop(username)
+      .then(res => {
+        if (!cancelled) setShop(res)
+      })
+      .catch(err => {
+        if (cancelled) return
+        if (err instanceof ApiError && err.statusCode === 404) {
+          setFetchError('not_found')
+          return
+        }
+        setFetchError('other')
+      })
+      .finally(() => {
+        if (!cancelled) setIsFetching(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [username])
+
+  const BackHeader = (
+    <div className="sticky top-0 z-40 bg-background border-b border-border">
+      <div className="px-5 py-3 flex items-center">
+        <button
+          onClick={() => router.back()}
+          className="p-3 -m-3 hover:bg-input rounded transition-colors"
+          aria-label="Go back"
+        >
+          <ChevronLeft className="w-6 h-6 text-foreground" strokeWidth={2} />
+        </button>
+      </div>
+    </div>
+  )
+
+  // ── Loading view ──────────────────────────────────────────────────────────
+  if (isFetching) {
+    return (
+      <div className="bg-background min-h-screen text-foreground">
+        {BackHeader}
+        <main aria-busy="true">
+          <section className="px-5 sm:px-8 pt-10 pb-8">
+            <div className="max-w-3xl mx-auto flex flex-col items-center text-center lg:items-start lg:text-left animate-pulse">
+              <div className="w-24 h-24 lg:w-30 lg:h-30 rounded-full bg-input mb-5" />
+              <div className="h-10 w-2/3 bg-input rounded mb-2" />
+              <div className="h-4 w-1/2 bg-input rounded mb-5" />
+              <div className="h-4 w-full bg-input rounded mb-2 max-w-xl" />
+              <div className="h-4 w-3/4 bg-input rounded mb-6 max-w-xl" />
+            </div>
+          </section>
+          <div className="max-w-3xl mx-auto px-5 sm:px-8">
+            <div className="h-px bg-gold opacity-60" />
+          </div>
+          <section className="px-5 sm:px-8 py-10">
+            <div className="max-w-6xl mx-auto grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              {[0, 1, 2, 3].map(i => (
+                <div key={i} className="bg-white rounded-lg overflow-hidden animate-pulse">
+                  <div className="w-full aspect-square bg-input" />
+                  <div className="p-4 space-y-2">
+                    <div className="h-4 bg-input rounded w-3/4" />
+                    <div className="h-5 bg-input rounded w-1/2" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </main>
+      </div>
+    )
+  }
+
+  // ── Not found ─────────────────────────────────────────────────────────────
+  if (fetchError === 'not_found') {
+    return (
+      <div className="bg-background min-h-screen text-foreground">
+        {BackHeader}
+        <main className="mx-auto max-w-xl px-5 py-20 text-center">
+          <h1 className="font-serif text-3xl font-normal mb-2">Shop not found.</h1>
+          <p className="font-sans text-base text-muted mb-6">
+            We couldn&apos;t find a shop at @{username}.
+          </p>
+          <Link
+            href="/marketplace"
+            className="inline-block bg-primary text-primary-foreground px-6 py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity"
+          >
+            Back to the marketplace
+          </Link>
+        </main>
+      </div>
+    )
+  }
+
+  // ── Other error ───────────────────────────────────────────────────────────
+  if (fetchError === 'other' || !shop) {
+    return (
+      <div className="bg-background min-h-screen text-foreground">
+        {BackHeader}
+        <main className="mx-auto max-w-xl px-5 py-20 text-center">
+          <p className="font-sans text-base text-muted mb-4">
+            We couldn&apos;t load this shop.
+          </p>
+          <button
+            onClick={() => router.refresh()}
+            className="inline-block bg-primary text-primary-foreground px-6 py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity"
+          >
+            Try again
+          </button>
+        </main>
+      </div>
+    )
+  }
+
+  const { seller, products } = shop
+  const displayName = seller.displayName ?? seller.username
+  const initials = initialsFor(seller.displayName, seller.username)
+  const productCount = products.length
+
+  // Origin is read at render time so the share pill works on localhost and
+  // every deployed environment without baking the host into env vars.
+  const shopUrl =
+    typeof window !== 'undefined'
+      ? `${window.location.host}/shop/${seller.username}`
+      : `bitscy.com/shop/${seller.username}`
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(shopUrl)
+    navigator.clipboard.writeText(`${window.location.origin}/shop/${seller.username}`)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
   return (
     <div className="bg-background min-h-screen text-foreground">
-      {/* Back arrow header */}
-      <div className="sticky top-0 z-40 bg-background border-b border-border">
-        <div className="px-5 py-3 flex items-center">
-          <button
-            onClick={() => router.back()}
-            className="p-3 -m-3 hover:bg-input rounded transition-colors"
-            aria-label="Go back"
-          >
-            <ChevronLeft className="w-6 h-6 text-foreground" strokeWidth={2} />
-          </button>
-        </div>
-      </div>
+      {BackHeader}
 
       {/* Seller hero */}
       <section className="px-5 sm:px-8 pt-10 pb-8">
         <div className="max-w-3xl mx-auto flex flex-col items-center text-center lg:items-start lg:text-left">
-          {/* Avatar */}
-          <div
-            className="w-24 h-24 lg:w-30 lg:h-30 rounded-full flex items-center justify-center font-serif text-4xl lg:text-5xl font-normal mb-5"
-            style={{ backgroundColor: 'rgba(214, 121, 97, 0.2)', color: '#1F1410' }}
-          >
-            {shop.initials}
-          </div>
+          {/* Avatar — image when present, initials fallback */}
+          {seller.avatar ? (
+            <img
+              src={seller.avatar}
+              alt={displayName}
+              className="w-24 h-24 lg:w-30 lg:h-30 rounded-full object-cover mb-5"
+            />
+          ) : (
+            <div
+              className="w-24 h-24 lg:w-30 lg:h-30 rounded-full flex items-center justify-center font-serif text-4xl lg:text-5xl font-normal mb-5"
+              style={{ backgroundColor: 'rgba(214, 121, 97, 0.2)', color: '#1F1410' }}
+            >
+              {initials}
+            </div>
+          )}
 
           {/* Shop name */}
           <h1 className="font-serif text-4xl sm:text-5xl font-normal leading-tight mb-2">
-            {shop.shopName}
+            {displayName}
           </h1>
+
+          {/* HOOK: Feature 2 — Verified Seller badge chip goes here.
+              Fetch GET /api/shop/<username>/badge and render
+              "✓ Verified Seller · N sales since <date>" when 200,
+              silent skip on 404. */}
 
           {/* Subtitle */}
           <p className="font-sans text-sm sm:text-base text-muted mb-5">
-            by {shop.fullName} · {shop.products.length} {shop.products.length === 1 ? 'piece' : 'pieces'} · Ships from {shop.city}
+            by @{seller.username} · {productCount}{' '}
+            {productCount === 1 ? 'piece' : 'pieces'}
           </p>
 
           {/* Bio */}
-          <p className="font-sans text-base text-foreground leading-relaxed max-w-xl mb-6">
-            {shop.bio}
-          </p>
+          {seller.about && (
+            <p className="font-sans text-base text-foreground leading-relaxed max-w-xl mb-6">
+              {seller.about}
+            </p>
+          )}
+
+          {/* HOOK: Feature 8 — Long bio (markdown) goes here.
+              Fetch GET /api/shop/<username>/about and render below the
+              short `about` line when longBio is non-null. */}
+
+          {/* HOOK: Feature 9 — Sovereignty page link goes here.
+              <Link href={`/sovereignty/${nip19.npubEncode(seller.npub)}`}>
+                View Nostr presence ↗
+              </Link>
+              seller.npub is HEX; bech32-encode before linking. */}
 
           {/* Share pill */}
           <div className="inline-flex items-center gap-3 bg-white border border-border px-4 py-2 rounded-full">
@@ -124,6 +249,14 @@ export default function ShopPage({ params }: { params: Promise<{ username: strin
         </div>
       </section>
 
+      {/* HOOK: Feature 3 — Stall status banner goes here, between hero and
+          divider. Render only when seller.stallStatus !== 'open':
+            vacation → yellow banner with seller.stallStatusMessage
+            closed   → red banner, "This shop is currently closed"
+          When closed, also hide the "Buy" affordance on each product card
+          below (already none in this scaffold — they're plain Links to the
+          product detail page where the real Buy button lives). */}
+
       {/* Gold divider */}
       <div className="max-w-3xl mx-auto px-5 sm:px-8">
         <div className="h-px bg-gold opacity-60" />
@@ -132,44 +265,49 @@ export default function ShopPage({ params }: { params: Promise<{ username: strin
       {/* Products grid OR empty state */}
       <section className="px-5 sm:px-8 py-10">
         <div className="max-w-6xl mx-auto">
-          {shop.products.length > 0 ? (
+          {productCount > 0 ? (
             <>
               {/* Section heading row */}
               <div className="flex items-baseline justify-between mb-6">
                 <h2 className="font-serif text-2xl sm:text-3xl font-normal">All pieces</h2>
                 <p className="font-sans text-sm text-muted">
-                  {shop.products.length} {shop.products.length === 1 ? 'piece' : 'pieces'}
+                  {productCount} {productCount === 1 ? 'piece' : 'pieces'}
                 </p>
               </div>
 
               {/* Grid */}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-                {shop.products.map((product) => (
-                  <Link
-                    key={product.id}
-                    href={`/products/${product.id}`}
-                    className="bg-white rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow active:scale-[0.98] block"
-                  >
-                    <div className="w-full aspect-square bg-gray-200 overflow-hidden">
-                      <img
-                        src={product.image}
-                        alt={product.title}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
-                    <div className="p-4">
-                      <h3 className="font-serif text-base sm:text-lg text-foreground font-normal line-clamp-2 mb-2">
-                        {product.title}
-                      </h3>
-                      <p className="text-accent font-medium text-base sm:text-lg mb-1 tabular-nums">
-                        ₦{product.priceNaira.toLocaleString('en-US')}
-                      </p>
-                      <p className="text-muted text-xs sm:text-sm font-normal tabular-nums">
-                        {product.priceSats.toLocaleString('en-US')} sats
-                      </p>
-                    </div>
-                  </Link>
-                ))}
+                {products.map(product => {
+                  const cover = product.images?.[0] ?? ''
+                  return (
+                    <Link
+                      key={product.id}
+                      href={`/products/${product.id}`}
+                      className="bg-white rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow active:scale-[0.98] block"
+                    >
+                      <div className="w-full aspect-square bg-input overflow-hidden">
+                        {cover ? (
+                          <img
+                            src={cover}
+                            alt={product.title}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : null}
+                      </div>
+                      <div className="p-4">
+                        <h3 className="font-serif text-base sm:text-lg text-foreground font-normal line-clamp-2 mb-2">
+                          {product.title}
+                        </h3>
+                        <p className="text-accent font-medium text-base sm:text-lg mb-1 tabular-nums">
+                          {product.priceNgnDisplay || formatNgnFromSats(product.priceSats)}
+                        </p>
+                        <p className="text-muted text-xs sm:text-sm font-normal tabular-nums">
+                          {formatSats(product.priceSats)}
+                        </p>
+                      </div>
+                    </Link>
+                  )
+                })}
               </div>
             </>
           ) : (
@@ -182,10 +320,18 @@ export default function ShopPage({ params }: { params: Promise<{ username: strin
               />
               <h2 className="font-serif text-3xl font-normal mb-3">No pieces yet.</h2>
               <p className="font-sans text-base text-muted max-w-md">
-                {shop.shopName} hasn&apos;t listed anything yet. Check back soon.
+                {displayName} hasn&apos;t listed anything yet. Check back soon.
               </p>
             </div>
           )}
+
+          {/* HOOK: Feature 5 — Reviews section goes here, below the grid.
+              Fetch GET /api/shop/<username>/reviews and render
+                  <h2>Reviews</h2>
+                  <Stars rating={averageRating}/> ({count})
+                  <ul>{reviews.map(r => <ReviewCard ... />)}</ul>
+              Each review links out to https://njump.me/<nostrEventId>.
+              Hide section entirely if count === 0. */}
         </div>
       </section>
     </div>
