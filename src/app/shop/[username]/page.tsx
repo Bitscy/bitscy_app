@@ -3,6 +3,7 @@
 import { use, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { nip19 } from 'nostr-tools'
 import { ChevronLeft } from 'lucide-react'
 
 import { ApiError } from '@/lib/api-error'
@@ -392,6 +393,16 @@ export default function ShopPage({ params }: { params: Promise<{ username: strin
   const initials = initialsFor(seller.displayName, seller.username)
   const productCount = products.length
 
+  // seller.npub from the API is HEX; bech32-encode it for the
+  // /sovereignty/[npub] route. Defensive try/catch so a malformed pubkey
+  // (shouldn't happen, but cheap insurance) doesn't crash the storefront.
+  let sellerBech32Npub: string | null = null
+  try {
+    sellerBech32Npub = nip19.npubEncode(seller.npub)
+  } catch {
+    sellerBech32Npub = null
+  }
+
   // Origin is read at render time so the share pill works on localhost and
   // every deployed environment without baking the host into env vars.
   const shopUrl =
@@ -457,11 +468,17 @@ export default function ShopPage({ params }: { params: Promise<{ username: strin
           <LongBioBlock username={seller.username} />
 
 
-          {/* HOOK: Feature 9 — Sovereignty page link goes here.
-              <Link href={`/sovereignty/${nip19.npubEncode(seller.npub)}`}>
-                View Nostr presence ↗
-              </Link>
-              seller.npub is HEX; bech32-encode before linking. */}
+          {/* Sovereignty link — surface to buyers that the seller's
+              identity lives on Nostr, not in our DB. seller.npub from the
+              storefront API is HEX; convert to bech32 for the URL. */}
+          {sellerBech32Npub && (
+            <Link
+              href={`/sovereignty/${sellerBech32Npub}`}
+              className="font-sans text-xs text-accent hover:underline mb-6"
+            >
+              View Nostr presence ↗
+            </Link>
+          )}
 
           {/* Share pill */}
           <div className="inline-flex items-center gap-3 bg-white border border-border px-4 py-2 rounded-full">
