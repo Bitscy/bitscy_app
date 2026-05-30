@@ -3,6 +3,7 @@
 import { use, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { nip19 } from 'nostr-tools'
 import { ChevronLeft, Copy, Check, Eye, EyeOff, Loader2 } from 'lucide-react'
 
 import { ApiError } from '@/lib/api-error'
@@ -480,6 +481,27 @@ export default function BuyerOrderDetailPage({
               <p className="font-sans text-xs text-accent">Visit shop →</p>
             </div>
           </Link>
+
+          {/* Sovereignty link — direct buyers to the seller's full Nostr
+              presence (kind 0, products, reviews, ledger, payouts...) so
+              the public audit trail of the sale is one tap away. */}
+          {(() => {
+            try {
+              const npub = nip19.npubEncode(order.sellerNpub)
+              return (
+                <p className="mt-3 text-center">
+                  <Link
+                    href={`/sovereignty/${npub}`}
+                    className="font-sans text-xs text-accent hover:underline"
+                  >
+                    View this seller&apos;s Nostr presence ↗
+                  </Link>
+                </p>
+              )
+            } catch {
+              return null
+            }
+          })()}
         </section>
 
         {/* Order state actions — buyer-side. "Confirm received" appears on
