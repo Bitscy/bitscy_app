@@ -95,3 +95,19 @@ export interface StorefrontResponse {
 export function getShop(username: string): Promise<StorefrontResponse> {
   return fetcher(`/api/shop/${encodeURIComponent(username)}`);
 }
+
+// ============================================================================
+// Verified Seller badge — sourced from the seller's ledger, mirrored as a
+// kind 30052 Nostr event when the first sale settles.
+// ============================================================================
+
+export interface SellerBadgeResponse {
+  sellerHexPubkey: string;
+  firstSaleAt: number; // Unix seconds, not ms
+  totalSales: number;
+  nostr: { kind: number; dTag: string };
+}
+
+export function getSellerBadge(username: string): Promise<SellerBadgeResponse> {
+  return fetcher(`/api/shop/${encodeURIComponent(username)}/badge`);
+}
