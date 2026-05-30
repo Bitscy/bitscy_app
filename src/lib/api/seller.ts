@@ -77,3 +77,33 @@ export interface ShopReviewsResponse {
 export function getShopReviews(username: string): Promise<ShopReviewsResponse> {
   return fetcher(`/api/shop/${encodeURIComponent(username)}/reviews`);
 }
+
+// ============================================================================
+// Long bio (kind 30023)
+// ============================================================================
+
+import type { User } from '@/types/shared';
+
+/**
+ * Save the authenticated seller's long-form bio. Server publishes a NIP-23
+ * kind 30023 event to relays on success. Min 1 char, max 10,000 chars.
+ */
+export function updateLongBio(longBio: string): Promise<{ user: User }> {
+  return patchFetcher('/api/auth/me/long-bio', { longBio });
+}
+
+export interface ShopAboutResponse {
+  username: string;
+  displayName: string | null;
+  longBio: string | null;
+  nostr: { kind: number; dTag: string; pubkey: string } | null;
+}
+
+/**
+ * Public storefront read — returns the seller's long bio markdown along
+ * with the Nostr event coordinates so clients can link out to the NIP-23
+ * article on a long-form reader.
+ */
+export function getShopAbout(username: string): Promise<ShopAboutResponse> {
+  return fetcher(`/api/shop/${encodeURIComponent(username)}/about`);
+}
