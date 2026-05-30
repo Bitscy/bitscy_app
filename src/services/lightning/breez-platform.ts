@@ -189,6 +189,65 @@ export async function sendPlatformPayment(bolt11: string): Promise<void> {
 }
 
 /**
+ * Look up the status of an inbound Lightning payment by paymentHash, asking
+ * the underlying provider directly. Used by the verify polling endpoint as a
+ * fallback for when the event listener didn't fire — in dev mode Next.js can
+ * leave the boot-time listener on a different SDK module instance than the
+ * one the payment actually landed on.
+ *
+ * Returns:
+ *   'settled' — provider says the payment completed
+ *   'pending' — provider knows about the payment but it hasn't completed
+ *   'unknown' — provider has never seen this hash (or the lookup failed)
+ */
+export type PaymentLookupStatus = 'settled' | 'pending' | 'unknown';
+
+export async function getReceivePaymentStatus(paymentHash: string): Promise<PaymentLookupStatus> {
+  if (USE_MOCK) {
+    return mockSettled.has(paymentHash) ? 'settled' : 'pending';
+  }
+  if (USE_LNBITS) {
+    const lnbits = await getLnbits();
+    const maybeFn = (lnbits as unknown as Record<string, unknown>).lnbitsGetPaymentStatus;
+    if (typeof maybeFn === 'function') {
+      return (maybeFn as (h: string) => Promise<PaymentLookupStatus>)(paymentHash);
+    }
+    return 'unknown';
+  }
+
+  // Real Breez SDK Liquid path. listPayments() is expected to read from the
+  // SDK's local state with no network round-trip, but in dev we have seen it
+  // block for minutes (likely because module isolation creates a second SDK
+  // instance that has to sync from scratch). Wrap the call in a hard timeout
+  // so the verify endpoint can never be held up by a slow SDK — the next
+  // poll just retries.
+  const LOOKUP_TIMEOUT_MS = 2_000;
+  try {
+    const lookup = (async () => {
+      const sdk = await getRealSdk();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const payments: any[] = await sdk.listPayments({});
+      const match = payments.find(
+        (p) => p?.details?.paymentHash === paymentHash || p?.details?.preimage_hash === paymentHash,
+      );
+      if (!match) return 'unknown' as PaymentLookupStatus;
+      const status = String(match.status ?? '').toLowerCase();
+      if (status === 'complete' || status === 'completed' || status === 'success') {
+        return 'settled' as PaymentLookupStatus;
+      }
+      return 'pending' as PaymentLookupStatus;
+    })();
+    const timeout = new Promise<PaymentLookupStatus>((resolve) =>
+      setTimeout(() => resolve('unknown'), LOOKUP_TIMEOUT_MS),
+    );
+    return await Promise.race([lookup, timeout]);
+  } catch (err) {
+    console.error('[breez] getReceivePaymentStatus failed for', paymentHash, err);
+    return 'unknown';
+  }
+}
+
+/**
  * Register a handler for incoming payment events.
  * Call once at server boot; handler receives every paymentSucceeded event.
  */
