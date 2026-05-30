@@ -12,7 +12,7 @@ import {
   patchFetcher,
   postFetcher,
 } from '@/lib/fetcher';
-import type { Product, ProductCategory } from '@/types/shared';
+import type { Product, ProductCategory, SellerInfo } from '@/types/shared';
 
 export interface CreateProductInput {
   title: string;
@@ -78,4 +78,20 @@ export function updateProduct(
 
 export function deleteProduct(id: string): Promise<{ ok: true }> {
   return deleteFetcher(`/api/products/${encodeURIComponent(id)}`);
+}
+
+// ============================================================================
+// Storefront — public seller page
+// ============================================================================
+
+export interface StorefrontResponse {
+  seller: SellerInfo;
+  products: Product[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export function getShop(username: string): Promise<StorefrontResponse> {
+  return fetcher(`/api/shop/${encodeURIComponent(username)}`);
 }
