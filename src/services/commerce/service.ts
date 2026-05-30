@@ -5,7 +5,11 @@ import { sendPushNotification, ExpiredSubscriptionError } from '@/lib/push';
 import * as repository from './repository';
 import type { OrderWithRelations } from './repository';
 import * as catalogService from '@/services/catalog/service';
-import { createPlatformInvoice, sendPlatformPayment } from '@/services/lightning/breez-platform';
+import {
+  createPlatformInvoice,
+  getReceivePaymentStatus,
+  sendPlatformPayment,
+} from '@/services/lightning/breez-platform';
 import { trackPendingPayment, findByPaymentHash } from './pending-payments';
 import { recordEntry, getBalance } from './ledger';
 import { getBtcNgnRate, satsToNgnLive } from '@/services/pricing/coingecko';
@@ -306,9 +310,9 @@ export async function checkInvoiceStatus(
   // Mock-mode fallback. The mock provider's setTimeout-based settlement fires
   // in-process events that rely on the instrumentation hook's handler being
   // registered in the same module instance — Next.js dev mode doesn't always
-  // honor that. Here we make the polling endpoint itself authoritative in
-  // mock mode: if the PendingPayment is older than the mock's 30s auto-settle
-  // window, mark it paid synchronously. Real Lightning never takes this path.
+  // honor that. Make the polling endpoint itself authoritative in mock mode:
+  // if the PendingPayment is older than the mock's 30s auto-settle window,
+  // mark it paid synchronously.
   if (process.env.USE_MOCK_LIGHTNING === 'true') {
     const MOCK_SETTLE_MS = 30_000;
     const age = Date.now() - pending.createdAt.getTime();
@@ -316,6 +320,35 @@ export async function checkInvoiceStatus(
       const paidOrder = await markPaid(paymentHash);
       return { settled: true, order: paidOrder };
     }
+    return { settled: false, order: null };
+  }
+
+  // Real Lightning fallback. Same shape of issue: in dev mode the boot-time
+  // event listener can end up on a different module instance than the SDK
+  // that actually received the payment, so paymentSucceeded never reaches
+  // markPaid. Ask the SDK directly whether this paymentHash has settled,
+  // and call markPaid if so. The SDK lookup is hard-capped at 2 seconds.
+  //
+  // Skip the lookup for very fresh invoices (under 5 seconds old) — the
+  // payment can't have landed yet, the lookup just adds latency to the
+  // response. Real Lightning typically takes 5-30 seconds to settle.
+  const SETTLEMENT_GRACE_MS = 5_000;
+  const age = Date.now() - pending.createdAt.getTime();
+  if (age < SETTLEMENT_GRACE_MS) {
+    return { settled: false, order: null };
+  }
+
+  try {
+    const status = await getReceivePaymentStatus(paymentHash);
+    if (status === 'settled') {
+      const paidOrder = await markPaid(paymentHash);
+      return { settled: true, order: paidOrder };
+    }
+  } catch (err) {
+    console.warn(
+      '[checkInvoiceStatus] SDK status poll failed, returning negative response:',
+      err,
+    );
   }
 
   return { settled: false, order: null };
