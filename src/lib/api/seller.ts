@@ -54,3 +54,26 @@ export function getOwnStallStatus(username: string): Promise<ShopCurrentStatus> 
     stallStatusMessage: r.seller.stallStatusMessage,
   }));
 }
+
+// ============================================================================
+// Reviews (kind 30051)
+// ============================================================================
+
+export interface ShopReview {
+  id: string;
+  orderId: string;
+  rating: number;
+  content: string;
+  nostrEventId: string;
+  createdAt: string;
+}
+
+export interface ShopReviewsResponse {
+  averageRating: number; // 1 decimal, e.g. 4.7
+  count: number;
+  reviews: ShopReview[];
+}
+
+export function getShopReviews(username: string): Promise<ShopReviewsResponse> {
+  return fetcher(`/api/shop/${encodeURIComponent(username)}/reviews`);
+}

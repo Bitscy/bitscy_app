@@ -7,6 +7,7 @@ import { ChevronLeft } from 'lucide-react'
 
 import { ApiError } from '@/lib/api-error'
 import { getShop, type StorefrontResponse } from '@/lib/api/products'
+import { getShopReviews, type ShopReview } from '@/lib/api/seller'
 import { VerifiedSellerBadge } from '@/components/seller/verified-seller-badge'
 
 // Demo BTC/NGN rate, mirrored from the server. Same constants as the
@@ -35,6 +36,130 @@ function formatSats(satsStr: string): string {
 function initialsFor(name: string | null, fallback: string): string {
   const source = (name && name.trim()) || fallback
   return (source.charAt(0) || '?').toUpperCase()
+}
+
+function relativeReviewTime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime()
+  if (ms < 0 || Number.isNaN(ms)) return ''
+  const days = Math.floor(ms / (24 * 60 * 60 * 1000))
+  if (days < 1) return 'today'
+  if (days < 7) return `${days}d ago`
+  const weeks = Math.floor(days / 7)
+  if (weeks < 5) return `${weeks}w ago`
+  const months = Math.floor(days / 30)
+  if (months < 12) return `${months}mo ago`
+  return new Date(iso).toLocaleDateString()
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 5-star renderer. Solid star up to rounded(rating), outline for the rest.
+// Reads at a glance and renders cleanly at any size from glyphs alone.
+// ────────────────────────────────────────────────────────────────────────────
+function Stars({ rating, size = 'sm' }: { rating: number; size?: 'sm' | 'lg' }) {
+  const filled = Math.round(Math.max(0, Math.min(5, rating)))
+  const cls = size === 'lg' ? 'text-xl sm:text-2xl' : 'text-base'
+  return (
+    <span
+      className={`inline-flex gap-0.5 leading-none tabular-nums ${cls}`}
+      aria-label={`${rating.toFixed(1)} out of 5`}
+      role="img"
+    >
+      {Array.from({ length: 5 }).map((_, i) => (
+        <span
+          key={i}
+          aria-hidden="true"
+          className={i < filled ? 'text-gold' : 'text-border'}
+        >
+          {i < filled ? '★' : '☆'}
+        </span>
+      ))}
+    </span>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Reviews section — self-contained: fetches its own data, hides itself on
+// 404 / empty / fetch failure so storefronts without any reviews render
+// cleanly with no leftover heading.
+// ────────────────────────────────────────────────────────────────────────────
+function ReviewsSection({ username }: { username: string }) {
+  const [data, setData] = useState<{ averageRating: number; count: number; reviews: ShopReview[] } | null>(null)
+  const [isFetching, setIsFetching] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    setIsFetching(true)
+    getShopReviews(username)
+      .then(res => {
+        if (!cancelled) setData(res)
+      })
+      .catch(() => {
+        // Silent — most likely 404 (no reviews yet) or a transient relay
+        // error. Either way: no review surface for this storefront.
+        if (!cancelled) setData(null)
+      })
+      .finally(() => {
+        if (!cancelled) setIsFetching(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [username])
+
+  // Hide entirely while loading and on empty/error — the rest of the
+  // storefront stays the same and there's no "Reviews: 0" heading to
+  // make a new shop feel deserted.
+  if (isFetching || !data || data.count === 0) return null
+
+  return (
+    <section className="mt-12 pt-8 border-t border-border">
+      {/* Header — big stars, average score, review count. */}
+      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-2 mb-6">
+        <h2 className="font-serif text-2xl sm:text-3xl font-normal">Reviews</h2>
+        <div className="flex items-center gap-2">
+          <Stars rating={data.averageRating} size="lg" />
+          <span className="font-sans text-base font-medium text-foreground tabular-nums">
+            {data.averageRating.toFixed(1)}
+          </span>
+          <span className="font-sans text-sm text-muted">
+            · {data.count} {data.count === 1 ? 'review' : 'reviews'}
+          </span>
+        </div>
+      </div>
+
+      {/* List */}
+      <ul className="space-y-4">
+        {data.reviews.map(r => (
+          <li
+            key={r.id}
+            className="bg-white border border-border rounded-lg p-4"
+          >
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <Stars rating={r.rating} />
+              <p className="font-sans text-xs text-muted">
+                {relativeReviewTime(r.createdAt)}
+              </p>
+            </div>
+            <p className="font-sans text-sm sm:text-base text-foreground leading-relaxed whitespace-pre-wrap">
+              {r.content}
+            </p>
+            {r.nostrEventId && (
+              <p className="mt-3 pt-3 border-t border-border">
+                <a
+                  href={`https://njump.me/${r.nostrEventId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-sans text-xs text-accent hover:underline"
+                >
+                  View on Nostr ↗
+                </a>
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
 }
 
 interface StallStatusBannerProps {
@@ -402,13 +527,8 @@ export default function ShopPage({ params }: { params: Promise<{ username: strin
             </div>
           )}
 
-          {/* HOOK: Feature 5 — Reviews section goes here, below the grid.
-              Fetch GET /api/shop/<username>/reviews and render
-                  <h2>Reviews</h2>
-                  <Stars rating={averageRating}/> ({count})
-                  <ul>{reviews.map(r => <ReviewCard ... />)}</ul>
-              Each review links out to https://njump.me/<nostrEventId>.
-              Hide section entirely if count === 0. */}
+          <ReviewsSection username={seller.username} />
+
         </div>
       </section>
     </div>
