@@ -14,6 +14,7 @@ import {
   type BuyerOrderDetail,
 } from '@/lib/api/commerce'
 import { useSession } from '@/lib/auth/use-session'
+import { OrderProgressStrip } from '@/components/order/order-progress-strip'
 import type { OrderStatus } from '@/types/shared'
 
 // Buyer becomes review-eligible 14 days after shipping if not already
@@ -343,7 +344,10 @@ export default function BuyerOrderDetailPage({
           </div>
         </div>
 
-        <h1 className="font-serif text-3xl sm:text-4xl font-normal mb-8 mt-4">Your order.</h1>
+        <h1 className="font-serif text-3xl sm:text-4xl font-normal mb-6 mt-4">Your order.</h1>
+
+        <OrderProgressStrip status={order.status} currentState={order.currentState} />
+
 
         {/* Timeline */}
         <section className="mb-8">

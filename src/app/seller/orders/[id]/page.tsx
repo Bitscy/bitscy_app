@@ -15,6 +15,7 @@ import {
 } from '@/lib/api/commerce'
 import { useSession } from '@/lib/auth/use-session'
 import { getSecretKey } from '@/lib/auth/storage'
+import { OrderProgressStrip } from '@/components/order/order-progress-strip'
 import type { OrderStatus } from '@/types/shared'
 
 // Demo BTC/NGN rate, mirrored from the server.
@@ -376,7 +377,10 @@ export default function SellerOrderDetailPage({
           </div>
         </div>
 
-        <h1 className="font-serif text-3xl sm:text-4xl font-normal mb-8 mt-4">Order details.</h1>
+        <h1 className="font-serif text-3xl sm:text-4xl font-normal mb-6 mt-4">Order details.</h1>
+
+        <OrderProgressStrip status={order.status} currentState={order.currentState} />
+
 
         {/* Timeline */}
         <section className="mb-8">
