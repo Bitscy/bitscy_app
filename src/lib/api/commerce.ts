@@ -75,6 +75,32 @@ export function getBuyerOrder(id: string): Promise<BuyerOrderDetail> {
   return fetcher(`/api/orders/${encodeURIComponent(id)}`);
 }
 
+// ============================================================================
+// Buyer review submission (kind 30051)
+// ============================================================================
+
+export interface SubmitOrderReviewInput {
+  rating: number; // 1-5
+  content: string; // 1-2000 chars
+  password: string; // server decrypts buyer nsec to sign the kind 30051
+}
+
+export interface OrderReviewResponse {
+  id: string;
+  orderId: string;
+  rating: number;
+  content: string;
+  nostrEventId: string;
+  createdAt: string;
+}
+
+export function submitOrderReview(
+  orderId: string,
+  input: SubmitOrderReviewInput,
+): Promise<OrderReviewResponse> {
+  return postFetcher(`/api/orders/${encodeURIComponent(orderId)}/review`, input);
+}
+
 // The seller view of an order detail includes the buyer's npub (pseudonymous,
 // public) and the NIP-04 ciphertext of the shipping address — the seller's
 // client decrypts using their nsec. Never exposes the buyer's displayName.

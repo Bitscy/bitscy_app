@@ -3,12 +3,30 @@
 import { use, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { ChevronLeft, Copy, Check } from 'lucide-react'
+import { ChevronLeft, Copy, Check, Eye, EyeOff, Loader2 } from 'lucide-react'
 
 import { ApiError } from '@/lib/api-error'
-import { getBuyerOrder, type BuyerOrderDetail } from '@/lib/api/commerce'
+import {
+  getBuyerOrder,
+  submitOrderReview,
+  type BuyerOrderDetail,
+} from '@/lib/api/commerce'
 import { useSession } from '@/lib/auth/use-session'
 import type { OrderStatus } from '@/types/shared'
+
+// Buyer becomes review-eligible 14 days after shipping if not already
+// marked delivered — same window the backend enforces in
+// /api/orders/[id]/review.
+const REVIEW_AUTO_RELEASE_DAYS = 14
+const REVIEW_AUTO_RELEASE_MS = REVIEW_AUTO_RELEASE_DAYS * 24 * 60 * 60 * 1000
+
+function isReviewEligible(order: BuyerOrderDetail): boolean {
+  if (order.status === 'DELIVERED') return true
+  if (order.status === 'SHIPPED' && order.shippedAt) {
+    return Date.now() - new Date(order.shippedAt).getTime() >= REVIEW_AUTO_RELEASE_MS
+  }
+  return false
+}
 
 // Demo BTC/NGN rate, mirrored from the server, for client-side sats → ₦ conversions.
 const NGN_PER_BTC = 145_000_000n
@@ -71,6 +89,17 @@ export default function BuyerOrderDetailPage({
   const [fetchError, setFetchError] = useState<'not_found' | 'other' | null>(null)
   const [refCopied, setRefCopied] = useState(false)
 
+  // Review form state. Hidden entirely until eligibility + form-open click.
+  const [reviewOpen, setReviewOpen] = useState(false)
+  const [reviewRating, setReviewRating] = useState(0)
+  const [reviewHoverRating, setReviewHoverRating] = useState(0)
+  const [reviewContent, setReviewContent] = useState('')
+  const [reviewPassword, setReviewPassword] = useState('')
+  const [reviewShowPassword, setReviewShowPassword] = useState(false)
+  const [reviewSubmitting, setReviewSubmitting] = useState(false)
+  const [reviewError, setReviewError] = useState<string | null>(null)
+  const [reviewSubmitted, setReviewSubmitted] = useState<{ nostrEventId: string } | null>(null)
+
   useEffect(() => {
     if (!user) return
     let cancelled = false
@@ -107,6 +136,43 @@ export default function BuyerOrderDetailPage({
     navigator.clipboard.writeText(order.id)
     setRefCopied(true)
     setTimeout(() => setRefCopied(false), 2000)
+  }
+
+  const handleSubmitReview = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!order || reviewSubmitting) return
+    if (reviewRating < 1 || reviewRating > 5) {
+      setReviewError('Tap a star to choose a rating.')
+      return
+    }
+    const trimmed = reviewContent.trim()
+    if (trimmed.length === 0) {
+      setReviewError('Add a few words about your experience.')
+      return
+    }
+    if (!reviewPassword) {
+      setReviewError('Your password is needed to sign the review.')
+      return
+    }
+    setReviewSubmitting(true)
+    setReviewError(null)
+    try {
+      const res = await submitOrderReview(order.id, {
+        rating: reviewRating,
+        content: trimmed,
+        password: reviewPassword,
+      })
+      setReviewSubmitted({ nostrEventId: res.nostrEventId })
+      setReviewPassword('')
+    } catch (err) {
+      setReviewError(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not publish your review. Try again.',
+      )
+    } finally {
+      setReviewSubmitting(false)
+    }
   }
 
   // ── Loading / error / not-found shells share the same header ───────────────
@@ -363,6 +429,187 @@ export default function BuyerOrderDetailPage({
             </div>
           </Link>
         </section>
+
+        {/* Review section — gated to delivered orders + the 14-day post-ship
+            auto-release window. Backend enforces the same rule and would 422
+            on a premature submit, but hiding the affordance here is the
+            kinder UX. Once submitted we replace the form with a confirmation. */}
+        {isReviewEligible(order) && (
+          <section className="mb-8">
+            <h2 className="font-serif text-lg font-normal mb-4">Your review</h2>
+
+            {reviewSubmitted ? (
+              <div className="bg-white border border-border rounded-lg p-4">
+                <p className="font-sans text-sm text-success font-medium mb-2">
+                  Review published to Nostr ✓
+                </p>
+                <p className="font-sans text-xs text-muted">
+                  Thanks for letting other buyers know. Your review is signed
+                  with your key and lives on public relays.
+                </p>
+                {reviewSubmitted.nostrEventId && (
+                  <p className="mt-3 pt-3 border-t border-border">
+                    <a
+                      href={`https://njump.me/${reviewSubmitted.nostrEventId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-sans text-xs text-accent hover:underline"
+                    >
+                      View on Nostr ↗
+                    </a>
+                  </p>
+                )}
+              </div>
+            ) : !reviewOpen ? (
+              <div className="bg-white border border-border rounded-lg p-4">
+                <p className="font-sans text-sm text-foreground mb-3">
+                  How did this piece arrive? A short review helps other
+                  buyers and goes straight to Nostr under your name.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setReviewOpen(true)}
+                  className="w-full bg-primary text-primary-foreground py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity"
+                  style={{ minHeight: '44px' }}
+                >
+                  Leave a review
+                </button>
+              </div>
+            ) : (
+              <form
+                onSubmit={handleSubmitReview}
+                className="bg-white border border-border rounded-lg p-4 space-y-4"
+              >
+                {/* Star picker — 5 large taps, hover preview on pointer
+                    devices, persistent selection on tap. */}
+                <div>
+                  <p className="font-sans text-sm text-muted mb-2">
+                    Your rating
+                  </p>
+                  <div
+                    className="flex gap-1"
+                    onMouseLeave={() => setReviewHoverRating(0)}
+                    role="radiogroup"
+                    aria-label="Rating"
+                  >
+                    {[1, 2, 3, 4, 5].map(n => {
+                      const active = (reviewHoverRating || reviewRating) >= n
+                      return (
+                        <button
+                          key={n}
+                          type="button"
+                          role="radio"
+                          aria-checked={reviewRating === n}
+                          aria-label={`${n} out of 5`}
+                          onClick={() => setReviewRating(n)}
+                          onMouseEnter={() => setReviewHoverRating(n)}
+                          disabled={reviewSubmitting}
+                          className="text-3xl leading-none p-1 -m-1 transition-colors"
+                          style={{ minWidth: '44px', minHeight: '44px' }}
+                        >
+                          <span className={active ? 'text-gold' : 'text-border'}>
+                            {active ? '★' : '☆'}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Content */}
+                <div>
+                  <label
+                    htmlFor="reviewContent"
+                    className="block font-sans text-sm text-muted mb-2"
+                  >
+                    A few words for the next buyer
+                  </label>
+                  <textarea
+                    id="reviewContent"
+                    value={reviewContent}
+                    onChange={e => setReviewContent(e.target.value)}
+                    maxLength={2000}
+                    rows={4}
+                    placeholder="What did you love? How did it arrive?"
+                    disabled={reviewSubmitting}
+                    className="w-full px-4 py-3 bg-white border border-border rounded font-sans text-base placeholder-muted focus:outline-none focus:ring-2 focus:ring-primary"
+                    style={{ fontSize: '16px' }}
+                  />
+                  <p className="font-sans text-xs text-muted mt-1 tabular-nums">
+                    {reviewContent.length}/2000
+                  </p>
+                </div>
+
+                {/* Password */}
+                <div>
+                  <label
+                    htmlFor="reviewPassword"
+                    className="block font-sans text-sm text-muted mb-2"
+                  >
+                    Your password (used once to sign this review)
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="reviewPassword"
+                      type={reviewShowPassword ? 'text' : 'password'}
+                      value={reviewPassword}
+                      onChange={e => setReviewPassword(e.target.value)}
+                      disabled={reviewSubmitting}
+                      autoComplete="current-password"
+                      className="w-full pl-4 pr-12 py-3 bg-white border border-border rounded font-sans text-base focus:outline-none focus:ring-2 focus:ring-primary"
+                      style={{ minHeight: '48px', fontSize: '16px' }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setReviewShowPassword(p => !p)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-foreground p-2"
+                      aria-label={reviewShowPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {reviewShowPassword ? (
+                        <EyeOff className="w-4 h-4" />
+                      ) : (
+                        <Eye className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {reviewError && (
+                  <p className="font-sans text-sm text-error">{reviewError}</p>
+                )}
+
+                <div className="flex items-center gap-3 pt-2">
+                  <button
+                    type="submit"
+                    disabled={reviewSubmitting}
+                    className="flex-1 bg-primary text-primary-foreground py-3 rounded font-sans font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    style={{ minHeight: '48px' }}
+                  >
+                    {reviewSubmitting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Publishing…
+                      </>
+                    ) : (
+                      'Publish review'
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReviewOpen(false)
+                      setReviewError(null)
+                    }}
+                    disabled={reviewSubmitting}
+                    className="text-muted font-sans font-medium hover:text-foreground transition-colors px-3"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
+          </section>
+        )}
 
         <p className="font-sans text-xs text-muted text-center mt-8">
           Need help with this order? Reach out to Bitscy support.
